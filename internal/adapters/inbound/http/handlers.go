@@ -1,0 +1,245 @@
+package http
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/charge"
+	"github.com/claudioed/wes-work-planning/internal/domain/plan"
+	"github.com/claudioed/wes-work-planning/internal/domain/shared"
+	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
+)
+
+// Handlers holds every use case the inbound HTTP adapter depends on.
+type Handlers struct {
+	ReceiveChargeForecast *usecases.ReceiveChargeForecast
+	CommitShiftPlan       *usecases.CommitShiftPlan
+	EnqueueWorkUnit       *usecases.EnqueueWorkUnit
+	ReleaseNextWork       *usecases.ReleaseNextWork
+	RecordCompletion      *usecases.RecordCompletion
+	SampleBacklog         *usecases.SampleBacklog
+	RebalanceDecision     *usecases.RebalanceDecision
+}
+
+func pathIdParam(r *http.Request) (shared.PathId, error) {
+	return shared.NewPathId(chi.URLParam(r, "pathId"))
+}
+
+func toBucketDTOs(buckets []charge.CPTBucket) []cptBucketDTO {
+	out := make([]cptBucketDTO, len(buckets))
+	for i, b := range buckets {
+		out[i] = cptBucketDTO{CPT: b.CPT.Time(), Quantity: b.Quantity.Value()}
+	}
+	return out
+}
+
+func toWorkUnitResponseDTO(unit *workunit.WorkUnit) workUnitResponseDTO {
+	return workUnitResponseDTO{
+		Id:        unit.Id(),
+		PathId:    unit.PathId().String(),
+		CPT:       unit.CPT().Time(),
+		Reference: unit.Reference(),
+		State:     unit.State().String(),
+	}
+}
+
+func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var body receiveChargeForecastRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	buckets := make([]usecases.CPTBucketInput, len(body.Buckets))
+	for i, b := range body.Buckets {
+		qty, err := shared.NewQuantity(b.Quantity)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		buckets[i] = usecases.CPTBucketInput{CPT: shared.NewCPT(b.CPT), Quantity: qty}
+	}
+
+	forecast, err := h.ReceiveChargeForecast.Execute(r.Context(), usecases.ReceiveChargeForecastRequest{
+		PathId:  pathId,
+		Buckets: buckets,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, chargeForecastResponseDTO{
+		PathId:        forecast.PathId().String(),
+		TotalQuantity: forecast.TotalQuantity().Value(),
+		Buckets:       toBucketDTOs(forecast.Buckets()),
+		ReceivedAt:    forecast.ReceivedAt(),
+	})
+}
+
+func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var body commitShiftPlanRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	heads, err := shared.NewStationCount(body.PlannedHeads)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	installed, err := shared.NewStationCount(body.InstalledStations)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	rate, err := shared.NewRate(body.RateUnitsPerHour)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	shiftPlan, err := h.CommitShiftPlan.Execute(r.Context(), usecases.CommitShiftPlanRequest{
+		PathId:            pathId,
+		PlannedHeads:      heads,
+		InstalledStations: installed,
+		Rate:              rate,
+		Hours:             body.Hours,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	pathPlan, _ := shiftPlan.PathPlan(pathId)
+	writeJSON(w, http.StatusCreated, toShiftPlanResponseDTO(pathPlan))
+}
+
+func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
+	return shiftPlanResponseDTO{
+		PathId:            p.PathId().String(),
+		PlannedHeads:      p.PlannedHeads().Value(),
+		InstalledStations: p.InstalledStations().Value(),
+		RateUnitsPerHour:  p.Rate().UnitsPerHour(),
+		Hours:             p.Hours(),
+		PlannedThroughput: p.PlannedThroughput(),
+	}
+}
+
+func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var body enqueueWorkUnitRequestDTO
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	unit, err := h.EnqueueWorkUnit.Execute(r.Context(), usecases.EnqueueWorkUnitRequest{
+		WorkUnitId: body.WorkUnitId,
+		PathId:     pathId,
+		CPT:        shared.NewCPT(body.CPT),
+		Reference:  body.Reference,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, toWorkUnitResponseDTO(unit))
+}
+
+func (h *Handlers) postRelease(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	unit, err := h.ReleaseNextWork.Execute(r.Context(), usecases.ReleaseNextWorkRequest{PathId: pathId})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toWorkUnitResponseDTO(unit))
+}
+
+func (h *Handlers) postComplete(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	unit, err := h.RecordCompletion.Execute(r.Context(), usecases.RecordCompletionRequest{WorkUnitId: id})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toWorkUnitResponseDTO(unit))
+}
+
+func (h *Handlers) getTelemetry(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	snapshot, err := h.SampleBacklog.Execute(r.Context(), usecases.SampleBacklogRequest{PathId: pathId})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, backlogSnapshotResponseDTO{
+		PathId:             snapshot.PathId.String(),
+		BacklogDepth:       snapshot.BacklogDepth,
+		WIP:                snapshot.WIP,
+		Mode:               snapshot.Mode,
+		OverAlarmThreshold: snapshot.OverAlarmThreshold,
+	})
+}
+
+func (h *Handlers) getRebalance(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	rec, err := h.RebalanceDecision.Execute(r.Context(), usecases.RebalanceDecisionRequest{PathId: pathId})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, rebalanceResponseDTO{
+		PathId:       rec.PathId.String(),
+		Action:       rec.Action.String(),
+		BacklogDepth: rec.BacklogDepth,
+		WIP:          rec.WIP,
+	})
+}
+
+func healthz(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}

@@ -1,0 +1,250 @@
+package usecases_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
+	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/plan"
+	"github.com/claudioed/wes-work-planning/internal/domain/release"
+	"github.com/claudioed/wes-work-planning/internal/domain/shared"
+	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
+)
+
+type fixture struct {
+	charges   *memory.ChargeRepo
+	plans     *memory.PlanRepo
+	pools     *memory.WorkPoolRepo
+	workUnits *memory.WorkUnitRepo
+	publisher *events.LogPublisher
+	clock     memory.FixedClock
+}
+
+func newFixture() fixture {
+	return fixture{
+		charges:   memory.NewChargeRepo(),
+		plans:     memory.NewPlanRepo(),
+		pools:     memory.NewWorkPoolRepo(),
+		workUnits: memory.NewWorkUnitRepo(),
+		publisher: events.NewLogPublisher(nil),
+		clock:     memory.FixedClock{At: time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)},
+	}
+}
+
+func TestReceiveChargeForecast(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewReceiveChargeForecast(f.charges, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	qty, _ := shared.NewQuantity(100)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	forecast, err := uc.Execute(context.Background(), usecases.ReceiveChargeForecastRequest{
+		PathId:  pathId,
+		Buckets: []usecases.CPTBucketInput{{CPT: cpt, Quantity: qty}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if forecast.TotalQuantity().Value() != 100 {
+		t.Fatalf("got total %d, want 100", forecast.TotalQuantity().Value())
+	}
+
+	stored, err := f.charges.FindByPathId(context.Background(), pathId)
+	if err != nil {
+		t.Fatalf("unexpected error fetching stored forecast: %v", err)
+	}
+	if stored.TotalQuantity().Value() != 100 {
+		t.Fatalf("stored forecast total = %d, want 100", stored.TotalQuantity().Value())
+	}
+
+	if len(f.publisher.Events()) != 1 {
+		t.Fatalf("got %d events, want 1", len(f.publisher.Events()))
+	}
+}
+
+func TestCommitShiftPlan_EnforcesHeadsInvariant(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewCommitShiftPlan(f.plans, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	rate, _ := shared.NewRate(50)
+	heads, _ := shared.NewStationCount(6)
+	installed, _ := shared.NewStationCount(5)
+
+	_, err := uc.Execute(context.Background(), usecases.CommitShiftPlanRequest{
+		PathId:            pathId,
+		PlannedHeads:      heads,
+		InstalledStations: installed,
+		Rate:              rate,
+		Hours:             8,
+	})
+	if !errors.Is(err, plan.ErrHeadsExceedStations) {
+		t.Fatalf("got err %v, want %v", err, plan.ErrHeadsExceedStations)
+	}
+}
+
+func TestCommitShiftPlan_Success(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewCommitShiftPlan(f.plans, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	rate, _ := shared.NewRate(50)
+	heads, _ := shared.NewStationCount(4)
+	installed, _ := shared.NewStationCount(5)
+
+	sp, err := uc.Execute(context.Background(), usecases.CommitShiftPlanRequest{
+		PathId:            pathId,
+		PlannedHeads:      heads,
+		InstalledStations: installed,
+		Rate:              rate,
+		Hours:             8,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := sp.PathPlan(pathId); !ok {
+		t.Fatalf("expected committed plan to be retrievable")
+	}
+	if len(f.publisher.Events()) != 1 {
+		t.Fatalf("got %d events, want 1", len(f.publisher.Events()))
+	}
+}
+
+func TestEnqueueWorkUnit_CreatesPoolOnFirstUse(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	unit, err := uc.Execute(context.Background(), usecases.EnqueueWorkUnitRequest{
+		WorkUnitId: "wu-1",
+		PathId:     pathId,
+		CPT:        cpt,
+		Reference:  "order-line-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unit.State() != workunit.Pending {
+		t.Fatalf("got state %v, want Pending", unit.State())
+	}
+
+	pool, err := f.pools.FindByPathId(context.Background(), pathId)
+	if err != nil {
+		t.Fatalf("unexpected error fetching pool: %v", err)
+	}
+	if pool.BacklogDepth() != 1 {
+		t.Fatalf("got backlog depth %d, want 1", pool.BacklogDepth())
+	}
+}
+
+func TestReleaseNextWork_ReleasesEarliestCPT(t *testing.T) {
+	f := newFixture()
+	enqueue := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	releaseUC := usecases.NewReleaseNextWork(f.pools, f.workUnits, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+
+	late := shared.NewCPT(f.clock.Now().Add(2 * time.Hour))
+	early := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	ctx := context.Background()
+	if _, err := enqueue.Execute(ctx, usecases.EnqueueWorkUnitRequest{WorkUnitId: "wu-late", PathId: pathId, CPT: late, Reference: "ref-late"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := enqueue.Execute(ctx, usecases.EnqueueWorkUnitRequest{WorkUnitId: "wu-early", PathId: pathId, CPT: early, Reference: "ref-early"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	released, err := releaseUC.Execute(ctx, usecases.ReleaseNextWorkRequest{PathId: pathId})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if released.Id() != "wu-early" {
+		t.Fatalf("got %q, want wu-early", released.Id())
+	}
+	if released.State() != workunit.Released {
+		t.Fatalf("got state %v, want Released", released.State())
+	}
+}
+
+func TestRecordCompletion_RejectsDoubleComplete(t *testing.T) {
+	f := newFixture()
+	enqueue := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	releaseUC := usecases.NewReleaseNextWork(f.pools, f.workUnits, f.publisher, f.clock)
+	complete := usecases.NewRecordCompletion(f.workUnits, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	ctx := context.Background()
+	if _, err := enqueue.Execute(ctx, usecases.EnqueueWorkUnitRequest{WorkUnitId: "wu-1", PathId: pathId, CPT: cpt, Reference: "ref-1"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := releaseUC.Execute(ctx, usecases.ReleaseNextWorkRequest{PathId: pathId}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := complete.Execute(ctx, usecases.RecordCompletionRequest{WorkUnitId: "wu-1"}); err != nil {
+		t.Fatalf("unexpected error on first completion: %v", err)
+	}
+	if _, err := complete.Execute(ctx, usecases.RecordCompletionRequest{WorkUnitId: "wu-1"}); !errors.Is(err, workunit.ErrAlreadyCompleted) {
+		t.Fatalf("got err %v, want %v", err, workunit.ErrAlreadyCompleted)
+	}
+}
+
+func TestSampleBacklog_RaisesThresholdEvent(t *testing.T) {
+	f := newFixture()
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := release.NewWorkPool(pathId, release.FlowFed, 0, 1)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	if err := pool.Enqueue("wu-1", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := pool.Enqueue("wu-2", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := f.pools.Save(context.Background(), pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	uc := usecases.NewSampleBacklog(f.pools, f.publisher, f.clock)
+	snapshot, err := uc.Execute(context.Background(), usecases.SampleBacklogRequest{PathId: pathId})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !snapshot.OverAlarmThreshold {
+		t.Fatalf("expected snapshot to be over alarm threshold")
+	}
+	if len(f.publisher.Events()) != 1 {
+		t.Fatalf("got %d events, want 1", len(f.publisher.Events()))
+	}
+}
+
+func TestRebalanceDecision_ReleaseFedRecommendsReassignLabor(t *testing.T) {
+	f := newFixture()
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := release.NewWorkPool(pathId, release.ReleaseFed, 1, 0)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	if err := pool.Enqueue("wu-1", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := pool.Enqueue("wu-2", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := pool.ReleaseNext(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := f.pools.Save(context.Background(), pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	uc := usecases.NewRebalanceDecision(f.pools, f.publisher, f.clock)
+	rec, err := uc.Execute(context.Background(), usecases.RebalanceDecisionRequest{PathId: pathId})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rec.Action != usecases.ReassignLabor {
+		t.Fatalf("got action %v, want ReassignLabor", rec.Action)
+	}
+}
