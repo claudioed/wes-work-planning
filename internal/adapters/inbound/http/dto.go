@@ -64,8 +64,23 @@ type backlogSnapshotResponseDTO struct {
 }
 
 type rebalanceResponseDTO struct {
-	PathId       string `json:"pathId"`
-	Action       string `json:"action"`
-	BacklogDepth int    `json:"backlogDepth"`
-	WIP          int    `json:"wip"`
+	PathId       string            `json:"pathId"`
+	Action       string            `json:"action"`
+	BacklogDepth int               `json:"backlogDepth"`
+	WIP          int               `json:"wip"`
+	LaborPlan    *laborPlanViewDTO `json:"laborPlan,omitempty"`
+}
+
+type laborPlanViewDTO struct {
+	PathId       string    `json:"pathId"`
+	PlannedHeads int       `json:"plannedHeads"`
+	PlannedRate  float64   `json:"plannedRate"`
+	PlannedHours float64   `json:"plannedHours"`
+	ObservedAt   time.Time `json:"observedAt"`
+}
+
+type inventoryViewResponseDTO struct {
+	SKU            string    `json:"sku"`
+	UsableQuantity int       `json:"usableQuantity"`
+	ObservedAt     time.Time `json:"observedAt"`
 }

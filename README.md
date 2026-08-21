@@ -61,10 +61,12 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 
 ### Config
 
-| Env var        | Default | Purpose                                    |
-|----------------|---------|---------------------------------------------|
-| `HTTP_ADDR`    | `:8080` | Address the HTTP server listens on          |
-| `DATABASE_URL` | (unset) | Postgres DSN; falls back to in-memory if unset |
+| Env var          | Default | Purpose                                                                 |
+|------------------|---------|--------------------------------------------------------------------------|
+| `HTTP_ADDR`      | `:8080` | Address the HTTP server listens on                                     |
+| `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
+| `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published         |
+| `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
 
 ## API
 
@@ -135,6 +137,27 @@ Recommends `ThrottleUpstream` (flow-fed path over its alarm threshold) or
 `ReassignLabor` (release-fed path saturated at its WIP limit with backlog
 remaining), or `NoActionNeeded`.
 
+### `GET /paths/{pathId}/labor-plan-view` — LaborPlanView (read model)
+
+```sh
+curl localhost:8080/paths/pick-a/labor-plan-view
+```
+
+The latest labor plan Workforce Management reported for this path, projected
+from its `ShiftPlanCommitted` integration event. See **Integration** below —
+this is a separate read model from this service's own `ShiftPlan` aggregate.
+`404` if nothing has been observed yet.
+
+### `GET /inventory-view/{sku}` — InventoryView (read model)
+
+```sh
+curl localhost:8080/inventory-view/sku-1
+```
+
+The latest usable-quantity projection for a SKU, from Inventory's
+`StockReserved`/`ReservationRevoked` integration events. `404` if nothing
+has been observed yet.
+
 ### `GET /healthz`
 
 ```sh
@@ -156,6 +179,87 @@ skipped unless `DATABASE_URL` is set:
 DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" \
   go test -tags=integration ./internal/adapters/outbound/postgres/...
 ```
+
+The Kafka consumer has a build-tagged integration test suite that is skipped
+unless `KAFKA_BROKERS` is set (see **Integration** below):
+
+```sh
+KAFKA_BROKERS="localhost:9092" \
+  go test -tags=integration ./internal/adapters/inbound/kafka/...
+```
+
+## Integration
+
+This service both publishes and consumes integration events over Kafka
+(`github.com/segmentio/kafka-go`), on the shared broker other warehouse-systems
+services also use (`~/warehouse-systems/docker-compose.kafka.yml`,
+`localhost:9092` by default). Every service uses the same envelope:
+
+```json
+{
+  "event_id": "uuid-v4",
+  "event_type": "WorkReleased",
+  "occurred_at": "2026-08-21T22:00:00Z",
+  "source": "wes-work-planning",
+  "data": { }
+}
+```
+
+### Publishes
+
+Topic `warehouse.work-planning.events`:
+
+- **`WorkReleased`** — published when `ReleaseNextWork` releases a unit.
+  `data`: `{"path_id","work_unit_id","cpt","ref"}`. Consumed downstream by
+  fulfillment-execution, which turns it into a Task.
+
+Set `EVENT_PUBLISHER=kafka` (and `KAFKA_BROKERS`) to publish here instead of
+the default `log` publisher; `internal/adapters/outbound/kafka` implements the
+same `ports.EventPublisher` interface the log publisher does.
+
+### Consumes
+
+- Topic `warehouse.workforce.events`, event type `ShiftPlanCommitted` —
+  `data`: `{"building_id","shift_id","path_id","planned_heads","planned_rate","planned_hours"}`.
+  Projected into the `LaborPlanObserved` read model
+  (`GET /paths/{pathId}/labor-plan-view`) — **not** fed into this service's own
+  `ShiftPlan`/`CommitShiftPlan`, which is a different model in a different
+  bounded context that happens to share the term "ShiftPlan".
+- Topic `warehouse.inventory.events`, event types `StockReserved` and
+  `ReservationRevoked` — `data` for both: `{"sku","quantity","demand_ref"}`.
+  `StockReserved` decrements, `ReservationRevoked` increments, the
+  `UsableInventoryObserved` read model, keyed by SKU
+  (`GET /inventory-view/{sku}`).
+
+Setting `KAFKA_BROKERS` starts this consumer automatically, independent of
+`EVENT_PUBLISHER`.
+
+### Idempotency
+
+Kafka is at-least-once. Every consumed event's `event_id` is recorded in
+`processed_events` (Postgres) / an in-memory set before its effect is
+applied; a redelivered `event_id` is skipped (and still acked) rather than
+re-applied. See `internal/application/usecases/observe_labor_plan.go` and
+`observe_inventory_change.go`.
+
+### Smoke-testing against the shared broker
+
+With the shared broker running (`docker compose -f
+~/warehouse-systems/docker-compose.kafka.yml up -d`) and this service running
+with `KAFKA_BROKERS` set:
+
+```sh
+docker exec -i warehouse-kafka /opt/kafka/bin/kafka-console-producer.sh \
+  --broker-list localhost:9092 --topic warehouse.workforce.events <<'EOF'
+{"event_id":"evt-1","event_type":"ShiftPlanCommitted","occurred_at":"2026-08-21T20:00:00Z","source":"workforce-management","data":{"building_id":"bldg-1","shift_id":"shift-1","path_id":"pick-a","planned_heads":7,"planned_rate":95.5,"planned_hours":8}}
+EOF
+
+curl localhost:8080/paths/pick-a/labor-plan-view
+# {"pathId":"pick-a","plannedHeads":7,"plannedRate":95.5,"plannedHours":8,"observedAt":"..."}
+```
+
+Same pattern for `warehouse.inventory.events` / `StockReserved` /
+`GET /inventory-view/{sku}`.
 
 ## Invariants
 

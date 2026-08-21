@@ -10,6 +10,7 @@ import (
 
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
 	"github.com/claudioed/wes-work-planning/internal/domain/charge"
+	"github.com/claudioed/wes-work-planning/internal/domain/laborview"
 	"github.com/claudioed/wes-work-planning/internal/domain/plan"
 	"github.com/claudioed/wes-work-planning/internal/domain/release"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
@@ -119,6 +120,62 @@ func TestPostgresRepos(t *testing.T) {
 		}
 		if gotUnit.State() != workunit.Pending {
 			t.Fatalf("got state %v, want Pending", gotUnit.State())
+		}
+	})
+
+	t.Run("labor plan view, inventory view, and idempotent processed events", func(t *testing.T) {
+		laborRepo := postgres.NewLaborPlanViewRepo(pool)
+		inventoryRepo := postgres.NewInventoryViewRepo(pool)
+		processedRepo := postgres.NewProcessedEventRepo(pool)
+
+		observedAt := time.Now().Truncate(time.Microsecond)
+		view := laborview.LaborPlanObserved{
+			PathId: pathId, PlannedHeads: 4, PlannedRate: 90, PlannedHours: 8, ObservedAt: observedAt,
+		}
+		if err := laborRepo.Save(ctx, view); err != nil {
+			t.Fatalf("save labor plan view: %v", err)
+		}
+		gotLabor, err := laborRepo.FindByPathId(ctx, pathId)
+		if err != nil {
+			t.Fatalf("find labor plan view: %v", err)
+		}
+		if gotLabor.PlannedHeads != 4 {
+			t.Fatalf("got planned heads %d, want 4", gotLabor.PlannedHeads)
+		}
+
+		sku := "integration-sku-1"
+		if _, err := inventoryRepo.ApplyDelta(ctx, sku, -5, observedAt); err != nil {
+			t.Fatalf("apply delta: %v", err)
+		}
+		gotInv, err := inventoryRepo.ApplyDelta(ctx, sku, 2, observedAt)
+		if err != nil {
+			t.Fatalf("apply delta: %v", err)
+		}
+		if gotInv.UsableQuantity != -3 {
+			t.Fatalf("got usable quantity %d, want -3", gotInv.UsableQuantity)
+		}
+		gotInvFind, err := inventoryRepo.FindBySKU(ctx, sku)
+		if err != nil {
+			t.Fatalf("find by sku: %v", err)
+		}
+		if gotInvFind.UsableQuantity != -3 {
+			t.Fatalf("got usable quantity %d, want -3", gotInvFind.UsableQuantity)
+		}
+
+		eventId := "integration-evt-1"
+		alreadyProcessed, err := processedRepo.TryMarkProcessed(ctx, eventId, observedAt)
+		if err != nil {
+			t.Fatalf("try mark processed: %v", err)
+		}
+		if alreadyProcessed {
+			t.Fatalf("expected first mark to report alreadyProcessed=false")
+		}
+		alreadyProcessed, err = processedRepo.TryMarkProcessed(ctx, eventId, observedAt)
+		if err != nil {
+			t.Fatalf("try mark processed (redelivery): %v", err)
+		}
+		if !alreadyProcessed {
+			t.Fatalf("expected redelivery to report alreadyProcessed=true")
 		}
 	})
 }

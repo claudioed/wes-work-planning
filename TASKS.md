@@ -46,3 +46,21 @@ Build the full bounded context described in CLAUDE.md. Work in this order; keep
 ## Task 6 — Verify
 - `go build ./...`, `go vet ./...`, `go test ./...` all green. Fix until they are.
 - Confirm the three invariants each have a red-path test.
+
+## Task 7 — Cross-service integration (additive, see CLAUDE.md's new section)
+- Add `github.com/segmentio/kafka-go` dependency.
+- New Kafka outbound publisher adapter (publishes WorkReleased) selected via
+  EVENT_PUBLISHER env, default stays "log" so nothing existing breaks.
+- New Kafka inbound consumer for ShiftPlanCommitted (from workforce) and
+  StockReserved/ReservationRevoked (from inventory).
+- New read-model packages: internal/domain/laborview (by path_id),
+  internal/domain/inventoryview (by sku). New repos/ports/adapters (memory +
+  postgres) for each, new migration for processed_events + the two view tables.
+- New GET endpoints: /paths/{pathId}/labor-plan-view, /inventory-view/{sku}.
+- Idempotency via processed_events table (Postgres) / map (memory); unit test
+  double-delivery has no double effect.
+- Build-tagged (`integration`) test against the shared broker at localhost:9092
+  (docker-compose.kafka.yml in ~/warehouse-systems), skipped w/o KAFKA_BROKERS.
+- README gains an Integration section. Do a REAL smoke test against the running
+  shared broker before declaring done (publish a message, curl the view endpoint).
+- Full existing suite (build/vet/test/-race) must still be green afterward.

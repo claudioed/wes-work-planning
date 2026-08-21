@@ -19,9 +19,12 @@ func NewRouter(h *Handlers) *chi.Mux {
 		r.Post("/release", h.postRelease)
 		r.Get("/telemetry", h.getTelemetry)
 		r.Get("/rebalance", h.getRebalance)
+		r.Get("/labor-plan-view", h.getLaborPlanView)
 	})
 
 	r.Post("/work-units/{id}/complete", h.postComplete)
+
+	r.Get("/inventory-view/{sku}", h.getInventoryView)
 
 	return r
 }

@@ -4,15 +4,20 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	inboundhttp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/http"
+	inboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/inbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
+	outboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/outbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
@@ -28,9 +33,10 @@ func main() {
 func run() error {
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	databaseURL := os.Getenv("DATABASE_URL")
+	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
+	eventPublisherKind := getenv("EVENT_PUBLISHER", "log")
 
 	logger := log.New(os.Stdout, "wes ", log.LstdFlags)
-	publisher := events.NewLogPublisher(logger)
 	clock := memory.SystemClock{}
 
 	var (
@@ -38,6 +44,10 @@ func run() error {
 		plans     ports.PlanRepo
 		pools     ports.WorkPoolRepo
 		workUnits ports.WorkUnitRepo
+
+		laborPlanViews ports.LaborPlanViewRepo
+		inventoryViews ports.InventoryViewRepo
+		processedEvts  ports.ProcessedEventRepo
 	)
 
 	if databaseURL == "" {
@@ -46,6 +56,9 @@ func run() error {
 		plans = memory.NewPlanRepo()
 		pools = memory.NewWorkPoolRepo()
 		workUnits = memory.NewWorkUnitRepo()
+		laborPlanViews = memory.NewLaborPlanViewRepo()
+		inventoryViews = memory.NewInventoryViewRepo()
+		processedEvts = memory.NewProcessedEventRepo()
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -60,6 +73,23 @@ func run() error {
 		plans = postgres.NewPlanRepo(pool)
 		pools = postgres.NewWorkPoolRepo(pool)
 		workUnits = postgres.NewWorkUnitRepo(pool)
+		laborPlanViews = postgres.NewLaborPlanViewRepo(pool)
+		inventoryViews = postgres.NewInventoryViewRepo(pool)
+		processedEvts = postgres.NewProcessedEventRepo(pool)
+	}
+
+	var publisher ports.EventPublisher
+	switch eventPublisherKind {
+	case "kafka":
+		if kafkaBrokers == "" {
+			return fmt.Errorf("EVENT_PUBLISHER=kafka requires KAFKA_BROKERS to be set")
+		}
+		logger.Printf("publishing events to kafka brokers=%s", kafkaBrokers)
+		kafkaPublisher := outboundkafka.NewPublisher(brokerList(kafkaBrokers), workUnits, newEventID)
+		defer kafkaPublisher.Close()
+		publisher = kafkaPublisher
+	default:
+		publisher = events.NewLogPublisher(logger)
 	}
 
 	handlers := &inboundhttp.Handlers{
@@ -70,6 +100,8 @@ func run() error {
 		RecordCompletion:      usecases.NewRecordCompletion(workUnits, publisher, clock),
 		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
 		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
+		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),
+		InventoryView:         usecases.NewInventoryView(inventoryViews),
 	}
 
 	router := inboundhttp.NewRouter(handlers)
@@ -88,6 +120,22 @@ func run() error {
 		}
 	}()
 
+	var consumer *inboundkafka.Consumer
+	consumerCtx, cancelConsumer := context.WithCancel(context.Background())
+	defer cancelConsumer()
+
+	if kafkaBrokers != "" {
+		logger.Printf("consuming integration events from kafka brokers=%s", kafkaBrokers)
+		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
+		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
+		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, logger)
+		go func() {
+			if err := consumer.Run(consumerCtx); err != nil {
+				logger.Printf("kafka consumer stopped: %v", err)
+			}
+		}()
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -96,10 +144,34 @@ func run() error {
 		return err
 	case <-sigCh:
 		logger.Println("shutting down")
+		cancelConsumer()
+		if consumer != nil {
+			_ = consumer.Close()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)
 	}
+}
+
+func brokerList(csv string) []string {
+	parts := strings.Split(csv, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// newEventID generates a UUID v4 for outbound integration event envelopes.
+func newEventID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 func getenv(key, fallback string) string {

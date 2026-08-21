@@ -2,6 +2,7 @@ package http_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/laborview"
+	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
 
 func newTestRouter() http.Handler {
@@ -19,6 +22,8 @@ func newTestRouter() http.Handler {
 	plans := memory.NewPlanRepo()
 	pools := memory.NewWorkPoolRepo()
 	workUnits := memory.NewWorkUnitRepo()
+	laborPlanViews := memory.NewLaborPlanViewRepo()
+	inventoryViews := memory.NewInventoryViewRepo()
 	publisher := events.NewLogPublisher(nil)
 	clock := memory.FixedClock{At: time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)}
 
@@ -30,6 +35,8 @@ func newTestRouter() http.Handler {
 		RecordCompletion:      usecases.NewRecordCompletion(workUnits, publisher, clock),
 		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
 		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
+		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),
+		InventoryView:         usecases.NewInventoryView(inventoryViews),
 	}
 
 	return inboundhttp.NewRouter(h)
@@ -252,5 +259,104 @@ func TestGetRebalance_UnknownPathReturns404(t *testing.T) {
 	rec := doJSON(t, router, http.MethodGet, "/paths/unknown-path/rebalance", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got status %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetLaborPlanView_UnknownPathReturns404(t *testing.T) {
+	router := newTestRouter()
+	rec := doJSON(t, router, http.MethodGet, "/paths/pick-a/labor-plan-view", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetLaborPlanView_ReturnsObservedPlanAndSurfacesInRebalance(t *testing.T) {
+	laborPlanViews := memory.NewLaborPlanViewRepo()
+	pathId, _ := shared.NewPathId("pick-a")
+	if err := laborPlanViews.Save(context.Background(), laborview.LaborPlanObserved{
+		PathId: pathId, PlannedHeads: 4, PlannedRate: 90, PlannedHours: 8,
+		ObservedAt: time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("seed labor plan view: %v", err)
+	}
+
+	pools := memory.NewWorkPoolRepo()
+	workUnits := memory.NewWorkUnitRepo()
+	publisher := events.NewLogPublisher(nil)
+	clock := memory.FixedClock{At: time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)}
+
+	h := &inboundhttp.Handlers{
+		EnqueueWorkUnit:   usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock),
+		SampleBacklog:     usecases.NewSampleBacklog(pools, publisher, clock),
+		RebalanceDecision: usecases.NewRebalanceDecision(pools, publisher, clock),
+		LaborPlanView:     usecases.NewLaborPlanView(laborPlanViews),
+	}
+	router := inboundhttp.NewRouter(h)
+
+	enqueueBody := map[string]any{
+		"workUnitId": "wu-1",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-line-1",
+	}
+	if rec := doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", enqueueBody); rec.Code != http.StatusCreated {
+		t.Fatalf("setup: got status %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec := doJSON(t, router, http.MethodGet, "/paths/pick-a/labor-plan-view", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var view map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if view["plannedHeads"] != float64(4) {
+		t.Fatalf("unexpected labor-plan-view body: %s", rec.Body.String())
+	}
+
+	rebalanceRec := doJSON(t, router, http.MethodGet, "/paths/pick-a/rebalance", nil)
+	if rebalanceRec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rebalanceRec.Code, rebalanceRec.Body.String())
+	}
+	var rebalance map[string]any
+	if err := json.Unmarshal(rebalanceRec.Body.Bytes(), &rebalance); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	laborPlan, ok := rebalance["laborPlan"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected rebalance response to include laborPlan, got %s", rebalanceRec.Body.String())
+	}
+	if laborPlan["plannedHeads"] != float64(4) {
+		t.Fatalf("unexpected laborPlan in rebalance response: %v", laborPlan)
+	}
+}
+
+func TestGetInventoryView_UnknownSKUReturns404(t *testing.T) {
+	router := newTestRouter()
+	rec := doJSON(t, router, http.MethodGet, "/inventory-view/sku-1", nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("got status %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetInventoryView_ReturnsObservedQuantity(t *testing.T) {
+	inventoryViews := memory.NewInventoryViewRepo()
+	if _, err := inventoryViews.ApplyDelta(context.Background(), "sku-1", -3, time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("seed inventory view: %v", err)
+	}
+
+	h := &inboundhttp.Handlers{InventoryView: usecases.NewInventoryView(inventoryViews)}
+	router := inboundhttp.NewRouter(h)
+
+	rec := doJSON(t, router, http.MethodGet, "/inventory-view/sku-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var view map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if view["usableQuantity"] != float64(-3) {
+		t.Fatalf("unexpected inventory-view body: %s", rec.Body.String())
 	}
 }

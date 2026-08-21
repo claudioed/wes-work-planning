@@ -2,12 +2,15 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 	"github.com/claudioed/wes-work-planning/internal/domain/charge"
+	"github.com/claudioed/wes-work-planning/internal/domain/laborview"
 	"github.com/claudioed/wes-work-planning/internal/domain/plan"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
@@ -22,6 +25,10 @@ type Handlers struct {
 	RecordCompletion      *usecases.RecordCompletion
 	SampleBacklog         *usecases.SampleBacklog
 	RebalanceDecision     *usecases.RebalanceDecision
+
+	// Additive: cross-service integration read models (Task 7).
+	LaborPlanView *usecases.LaborPlanView
+	InventoryView *usecases.InventoryView
 }
 
 func pathIdParam(r *http.Request) (shared.PathId, error) {
@@ -232,11 +239,63 @@ func (h *Handlers) getRebalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, rebalanceResponseDTO{
+	resp := rebalanceResponseDTO{
 		PathId:       rec.PathId.String(),
 		Action:       rec.Action.String(),
 		BacklogDepth: rec.BacklogDepth,
 		WIP:          rec.WIP,
+	}
+	if h.LaborPlanView != nil {
+		if view, err := h.LaborPlanView.Execute(r.Context(), usecases.LaborPlanViewRequest{PathId: pathId}); err == nil {
+			resp.LaborPlan = toLaborPlanViewDTO(view)
+		} else if !errors.Is(err, ports.ErrNotFound) {
+			writeError(w, err)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func toLaborPlanViewDTO(view laborview.LaborPlanObserved) *laborPlanViewDTO {
+	return &laborPlanViewDTO{
+		PathId:       view.PathId.String(),
+		PlannedHeads: view.PlannedHeads,
+		PlannedRate:  view.PlannedRate,
+		PlannedHours: view.PlannedHours,
+		ObservedAt:   view.ObservedAt,
+	}
+}
+
+func (h *Handlers) getLaborPlanView(w http.ResponseWriter, r *http.Request) {
+	pathId, err := pathIdParam(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	view, err := h.LaborPlanView.Execute(r.Context(), usecases.LaborPlanViewRequest{PathId: pathId})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toLaborPlanViewDTO(view))
+}
+
+func (h *Handlers) getInventoryView(w http.ResponseWriter, r *http.Request) {
+	sku := chi.URLParam(r, "sku")
+
+	view, err := h.InventoryView.Execute(r.Context(), usecases.InventoryViewRequest{SKU: sku})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, inventoryViewResponseDTO{
+		SKU:            view.SKU,
+		UsableQuantity: view.UsableQuantity,
+		ObservedAt:     view.ObservedAt,
 	})
 }
 
