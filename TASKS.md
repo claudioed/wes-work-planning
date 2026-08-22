@@ -77,3 +77,14 @@ Build the full bounded context described in CLAUDE.md. Work in this order; keep
   shared broker running, publish a TaskCompleted message for a work unit
   currently in Released state and confirm it transitions to Completed.
 - Full existing suite (build/vet/test/-race), including Tasks 0-7, must stay green.
+
+## Task 10 — Quality engineering: linting, coverage, integration tests, mutation tests, CI
+Full spec in QUALITY.md at the repo root. Five ordered stages, each gates the
+next: (1) golangci-lint clean via the committed .golangci.yml, (2) unit test
+coverage >= 90% on internal/domain/... + internal/application/... combined,
+(3) real integration tests against live Postgres for every outbound Postgres
+adapter, (4) gremlins mutation testing on internal/domain/... only
+(exploratory, triaged not gated), (5) .github/workflows/ci.yml — lint+unit+
+integration blocking on every push/PR, mutation testing on a weekly schedule/
+manual dispatch only, never blocking PRs. Do not stop until every stage's
+Definition of Done in QUALITY.md is met, then report the final numbers.

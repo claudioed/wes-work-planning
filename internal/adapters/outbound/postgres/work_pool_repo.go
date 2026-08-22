@@ -40,7 +40,7 @@ func (r *WorkPoolRepo) Save(ctx context.Context, wp *release.WorkPool) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO work_pools (path_id, mode, wip_limit, alarm_threshold)

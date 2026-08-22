@@ -86,7 +86,7 @@ func run() error {
 		}
 		logger.Printf("publishing events to kafka brokers=%s", kafkaBrokers)
 		kafkaPublisher := outboundkafka.NewPublisher(brokerList(kafkaBrokers), workUnits, newEventID)
-		defer kafkaPublisher.Close()
+		defer func() { _ = kafkaPublisher.Close() }()
 		publisher = kafkaPublisher
 	default:
 		publisher = events.NewLogPublisher(logger)
