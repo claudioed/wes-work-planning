@@ -1,0 +1,12 @@
+apiVersion: v2
+name: wes-work-planning
+description: WES Work Planning & Release — core WES bounded context (charge, waveless release, flow balancing, drum-buffer-rope flow balancing)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/claudioed/wes-work-planning
+keywords:
+  - ddd
+  - hexagonal-architecture
+  - warehouse-execution-system
+  - golang

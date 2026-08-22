@@ -1,0 +1,105 @@
+# Default values for wes-work-planning.
+
+replicaCount: 1
+
+image:
+  repository: wes-work-planning
+  pullPolicy: IfNotPresent
+  # Overrides the image tag; defaults to .Chart.AppVersion
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: wes-work-planning.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# --- application configuration ---
+# The service falls back to in-memory adapters and a log-only event publisher
+# when database.url / kafka.enabled are left empty, exactly like running the
+# binary locally with no env vars set. Set database.url (or database.existingSecret)
+# for a durable deployment.
+config:
+  httpAddr: ":8080"
+  eventPublisher: "log"   # "log" or "kafka"
+
+database:
+  # Plaintext URL (fine for local/dev clusters). Prefer existingSecret for
+  # anything shared or long-lived.
+  url: ""
+  # Name of an existing Secret containing a DATABASE_URL key. Takes
+  # precedence over database.url when set.
+  existingSecret: ""
+  existingSecretKey: "DATABASE_URL"
+
+kafka:
+  enabled: false
+  brokers: "kafka:9092"
+
+# Extra environment variables appended verbatim (name/value or name/valueFrom).
+extraEnv: []
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

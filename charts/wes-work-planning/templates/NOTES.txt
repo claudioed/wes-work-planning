@@ -1,0 +1,30 @@
+{{ .Chart.Name }} has been deployed.
+
+Release:   {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Service:   {{ include "wes-work-planning.fullname" . }} ({{ .Values.service.type }}, port {{ .Values.service.port }})
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+Ingress:   http://{{ .host }}{{ (index .paths 0).path }}
+{{- end }}
+{{- else }}
+To reach it locally:
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "wes-work-planning.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://localhost:8080/healthz
+{{- end }}
+
+{{- if not (or .Values.database.url .Values.database.existingSecret) }}
+
+NOTE: no database.url / database.existingSecret was set — this deployment is
+running with IN-MEMORY adapters (state is lost on pod restart), the same
+fallback behaviour as running the binary locally with DATABASE_URL unset.
+{{- end }}
+
+{{- if not .Values.kafka.enabled }}
+NOTE: kafka.enabled is false — this deployment publishes domain events to its
+own log only (EVENT_PUBLISHER=log) and does not participate in the
+cross-service Kafka integration (WorkReleased / TaskCompleted / read-model
+projections). Set kafka.enabled=true and kafka.brokers to join the bus.
+{{- end }}
