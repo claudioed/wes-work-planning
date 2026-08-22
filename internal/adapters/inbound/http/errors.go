@@ -13,9 +13,17 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
 )
 
+// errMalformedBody is a sentinel wrapped around request-body decode failures
+// (invalid JSON) so statusFor routes them to 400 instead of falling through
+// to the default 500 case — malformed input is a client error, never a
+// server error.
+var errMalformedBody = errors.New("malformed request body")
+
 // statusFor maps a domain/application error to an HTTP status code.
 func statusFor(err error) int {
 	switch {
+	case errors.Is(err, errMalformedBody):
+		return http.StatusBadRequest
 	case errors.Is(err, ports.ErrNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, release.ErrWIPLimitReached),
@@ -44,9 +52,83 @@ func statusFor(err error) int {
 	}
 }
 
-func writeError(w http.ResponseWriter, err error) {
+// problemBaseURI is the type-URI namespace for this service's RFC 7807
+// problem categories. It does not need to resolve — it's an identifier, not
+// a fetchable page — but is namespaced per-service so type URIs never
+// collide across the warehouse-systems services.
+const problemBaseURI = "https://errors.wes-work-planning.warehouse-systems.dev/"
+
+// problemFor returns the RFC 7807 (type, title) pair for a category of
+// error. Categories mirror statusFor's grouping exactly — every sentinel
+// error statusFor recognizes has a corresponding case here.
+func problemFor(err error) (typeURI, title string) {
+	switch {
+	case errors.Is(err, errMalformedBody):
+		return problemBaseURI + "malformed-request-body", "Malformed request body"
+	case errors.Is(err, ports.ErrNotFound):
+		return problemBaseURI + "not-found", "Resource not found"
+	case errors.Is(err, release.ErrWIPLimitReached):
+		return problemBaseURI + "wip-limit-reached", "Release-fed pool WIP limit reached"
+	case errors.Is(err, release.ErrAlreadyReleased):
+		return problemBaseURI + "work-pool-entry-already-released", "Work pool entry already released"
+	case errors.Is(err, release.ErrDuplicateEntry):
+		return problemBaseURI + "work-unit-already-enqueued", "Work unit already enqueued in this pool"
+	case errors.Is(err, release.ErrEmptyPool):
+		return problemBaseURI + "work-pool-empty", "Work pool is empty"
+	case errors.Is(err, workunit.ErrAlreadyReleased):
+		return problemBaseURI + "work-unit-already-released", "Work unit already released"
+	case errors.Is(err, workunit.ErrAlreadyCompleted):
+		return problemBaseURI + "work-unit-already-completed", "Work unit already completed"
+	case errors.Is(err, workunit.ErrNotReleased):
+		return problemBaseURI + "work-unit-not-released", "Work unit not released"
+	case errors.Is(err, shared.ErrInvalidQuantity):
+		return problemBaseURI + "invalid-quantity", "Invalid quantity"
+	case errors.Is(err, shared.ErrInvalidRate):
+		return problemBaseURI + "invalid-rate", "Invalid rate"
+	case errors.Is(err, shared.ErrInvalidStationCount):
+		return problemBaseURI + "invalid-station-count", "Invalid station count"
+	case errors.Is(err, shared.ErrInvalidPathId):
+		return problemBaseURI + "invalid-path-id", "Invalid path id"
+	case errors.Is(err, shared.ErrInvalidHours):
+		return problemBaseURI + "invalid-hours", "Invalid hours"
+	case errors.Is(err, charge.ErrNoBuckets):
+		return problemBaseURI + "charge-forecast-requires-buckets", "Charge forecast requires at least one CPT bucket"
+	case errors.Is(err, charge.ErrUnknownCPT):
+		return problemBaseURI + "unknown-cpt", "No bucket exists for the given CPT"
+	case errors.Is(err, plan.ErrHeadsExceedStations):
+		return problemBaseURI + "heads-exceed-installed-stations", "Planned heads exceed installed stations"
+	case errors.Is(err, plan.ErrNoPathPlans):
+		return problemBaseURI + "shift-plan-requires-path-plans", "Shift plan requires at least one path plan"
+	case errors.Is(err, workunit.ErrEmptyId):
+		return problemBaseURI + "work-unit-id-required", "Work unit id is required"
+	case errors.Is(err, workunit.ErrEmptyReference):
+		return problemBaseURI + "work-unit-reference-required", "Work unit reference is required"
+	case errors.Is(err, release.ErrUnknownEntry):
+		return problemBaseURI + "work-pool-entry-not-found", "Work unit not found in this pool"
+	default:
+		return problemBaseURI + "internal-error", "Internal server error"
+	}
+}
+
+// writeError writes a domain/application error as an RFC 7807
+// (https://www.rfc-editor.org/rfc/rfc7807) application/problem+json body.
+// statusFor's mapping is unchanged; this only shapes what gets written.
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	status := statusFor(err)
-	writeJSON(w, status, errorResponse{Error: err.Error()})
+	typeURI, title := problemFor(err)
+	writeProblem(w, status, problemDetails{
+		Type:     typeURI,
+		Title:    title,
+		Status:   status,
+		Detail:   err.Error(),
+		Instance: r.URL.Path,
+	})
+}
+
+func writeProblem(w http.ResponseWriter, status int, body problemDetails) {
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

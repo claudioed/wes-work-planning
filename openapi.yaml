@@ -1,0 +1,973 @@
+openapi: 3.0.3
+info:
+  title: WES — Work Planning & Release
+  version: "1.0.0"
+  description: >
+    The core bounded context of a Warehouse Execution System (WES). It turns
+    a shift's **charge** (volume due by each CPT — Critical Pull Time, the
+    last moment a parcel can be manifested and still make its truck) into a
+    **plan** (rate × heads per process path), releases work continuously in
+    priority order (waveless — no discrete wave batches), and performs flow
+    balancing off live buffer telemetry using Drum-Buffer-Rope with CPT as
+    the drum. It is the "conductor": downstream of WMS planning/inventory,
+    upstream of WCS equipment control.
+
+
+    Aggregates owned by this service: `ChargeForecast` (volume due by CPT
+    bucket), `ShiftPlan`/`PathPlan` (committed rate × heads × hours split per
+    process path, enforcing `plannedHeads <= installedStations`), `WorkPool`
+    (the priority queue for one process path — release-fed pools enforce a
+    hard WIP limit, flow-fed pools only alarm), and `WorkUnit` (a releasable
+    unit of work with at-most-once assignment and no double-complete).
+
+
+    This service does **not** own equipment control (WCS), inventory
+    reservation, or workforce scheduling — it only *observes* projections of
+    those via Kafka integration events (`LaborPlanObserved`,
+    `UsableInventoryObserved`), exposed read-only through this API. It also
+    does not implement HATEOAS; this is a Richardson Maturity Level 2 API
+    (resource nouns, correct verbs, correct status codes) without
+    hypermedia controls.
+  contact:
+    name: WES Work Planning & Release
+    url: https://github.com/claudioed/wes-work-planning
+servers:
+  - url: http://localhost:8080
+    description: Local development (in-memory or Postgres adapters, see README)
+
+security: []
+
+tags:
+  - name: Charge Forecast
+    description: >
+      The volume that must clear a process path, bucketed by CPT. Not "total
+      due today" — a charge is a set of CPT/quantity pairs.
+  - name: Shift Plan
+    description: >
+      This service's own committed split of headcount across process paths:
+      rate × heads × hours per path, enforcing `plannedHeads <=
+      installedStations`. Distinct from Workforce Management's own
+      `ShiftPlan` concept — see the Labor Plan View tag for that.
+  - name: Work Units
+    description: >
+      A releasable unit of work (e.g. a pick task) enqueued onto a process
+      path's work pool. Carries a CPT and is assigned at most once.
+  - name: Release
+    description: >
+      Continuous, priority-ordered admission of work into a process path's
+      work pool (waveless) — earliest-CPT-first, at-most-once handout.
+  - name: Telemetry
+    description: >
+      Live buffer telemetry read models (backlog depth, WIP, feed mode)
+      built as projections from work-pool state, not aggregate state.
+  - name: Rebalance
+    description: >
+      Flow-balancing recommendations (throttle upstream release vs. flag
+      labor reassignment) computed from live backlog telemetry —
+      Drum-Buffer-Rope with CPT as the drum.
+  - name: Labor Plan View
+    description: >
+      A read-only projection of the labor plan Workforce Management last
+      reported for a path (via its own `ShiftPlanCommitted` integration
+      event). NOT this service's own Shift Plan aggregate — same term,
+      different bounded context.
+  - name: Inventory View
+    description: >
+      A read-only projection of the usable-quantity Inventory last reported
+      for a SKU (via its `StockReserved`/`ReservationRevoked` integration
+      events). Keyed by SKU, not by process path.
+  - name: Health
+    description: Operational health check.
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: >
+        Liveness probe for the service. Always returns 200 with a static
+        status body if the process is up — does not check downstream
+        dependencies (Postgres, Kafka).
+      tags: [Health]
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                required: [status]
+              example:
+                status: ok
+
+  /paths/{pathId}/charge:
+    post:
+      operationId: receiveChargeForecast
+      summary: Receive a charge forecast for a process path
+      description: >
+        Records the volume due by CPT for a process path — the ReceiveChargeForecast
+        use case. Replaces any existing forecast for the path with the new set
+        of CPT buckets (each bucket is an exact CPT timestamp and the quantity
+        due at that CPT). Publishes `ChargeForecastReceived`. This is the
+        input side of the "charge → plan → release" pipeline: a plan is later
+        committed against this charge, and work units enqueued against it are
+        released against a `WorkPool` in CPT priority order.
+      tags: [Charge Forecast]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReceiveChargeForecastRequest"
+            example:
+              buckets:
+                - cpt: "2026-08-21T12:00:00Z"
+                  quantity: 4200
+                - cpt: "2026-08-21T18:00:00Z"
+                  quantity: 1800
+      responses:
+        "201":
+          description: >
+            Charge forecast recorded. `Location` identifies the created
+            forecast's canonical resource path (this service has no dedicated
+            GET for a standalone charge forecast today — the total shows up
+            in `GET /paths/{pathId}/telemetry` once work is enqueued and
+            released against it).
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Canonical URI of the created charge forecast.
+              example: /paths/pick-a/charge
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChargeForecastResponse"
+              example:
+                pathId: pick-a
+                totalQuantity: 6000
+                buckets:
+                  - cpt: "2026-08-21T12:00:00Z"
+                    quantity: 4200
+                  - cpt: "2026-08-21T18:00:00Z"
+                    quantity: 1800
+                receivedAt: "2026-08-21T08:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /paths/{pathId}/plan:
+    post:
+      operationId: commitShiftPlan
+      summary: Commit this service's shift plan for a process path
+      description: >
+        Commits the rate × heads × hours split for a process path — the
+        CommitShiftPlan use case. Enforces the `PathPlan` aggregate invariant
+        `plannedHeads <= installedStations`; violating it fails the whole
+        commit (no partial commit). This is THIS service's own `ShiftPlan`
+        aggregate, distinct from the labor plan Workforce Management reports
+        (see `GET /paths/{pathId}/labor-plan-view`) even though both are
+        called "ShiftPlan" — classic same-term-different-bounded-context.
+        Publishes `ShiftPlanCommitted`.
+      tags: [Shift Plan]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommitShiftPlanRequest"
+            example:
+              plannedHeads: 6
+              installedStations: 8
+              rateUnitsPerHour: 95.5
+              hours: 8
+      responses:
+        "201":
+          description: >
+            Shift plan committed. `Location` identifies the committed plan's
+            canonical resource path (no dedicated GET for a standalone plan
+            today — `plannedThroughput` and the committed split are also
+            visible indirectly via `GET /paths/{pathId}/rebalance`'s labor
+            context).
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Canonical URI of the committed shift plan.
+              example: /paths/pick-a/plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShiftPlanResponse"
+              example:
+                pathId: pick-a
+                plannedHeads: 6
+                installedStations: 8
+                rateUnitsPerHour: 95.5
+                hours: 8
+                plannedThroughput: 4584
+        "400":
+          description: >
+            Malformed body, invalid field value (e.g. non-positive rate or
+            hours), or the `plannedHeads <= installedStations` invariant was
+            violated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/heads-exceed-installed-stations
+                title: Planned heads exceed installed stations
+                status: 400
+                detail: "planned heads exceeds installed stations"
+                instance: /paths/pick-a/plan
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /paths/{pathId}/work-units:
+    post:
+      operationId: enqueueWorkUnit
+      summary: Enqueue a work unit onto a process path's work pool
+      description: >
+        Adds a releasable unit of work (e.g. a pick task) to a process path's
+        `WorkPool` — the EnqueueWorkUnit use case. `workUnitId` is
+        client-supplied and must be unique within the pool: enqueueing the
+        same `workUnitId` twice returns `409 Conflict`
+        (`work-unit-already-enqueued`) rather than silently creating a
+        duplicate entry — this endpoint is idempotent-by-client-supplied-ID
+        in that sense, though not a pure no-op retry (a second call with the
+        same ID is rejected, not silently accepted). If this is the first
+        unit ever enqueued against the path, a `WorkPool` is auto-provisioned
+        as release-fed with a default WIP limit. Publishes `WorkUnitCreated`.
+      tags: [Work Units]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnqueueWorkUnitRequest"
+            example:
+              workUnitId: wu-482910
+              cpt: "2026-08-21T12:00:00Z"
+              reference: order-77213-line-1
+      responses:
+        "201":
+          description: Work unit enqueued in `Pending` state.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: Canonical URI of the created work unit.
+              example: /work-units/wu-482910
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkUnitResponse"
+              example:
+                id: wu-482910
+                pathId: pick-a
+                cpt: "2026-08-21T12:00:00Z"
+                reference: order-77213-line-1
+                state: Pending
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A work unit with this `workUnitId` is already enqueued in this pool.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/work-unit-already-enqueued
+                title: Work unit already enqueued in this pool
+                status: 409
+                detail: "work unit already enqueued in this pool"
+                instance: /paths/pick-a/work-units
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /paths/{pathId}/release:
+    post:
+      operationId: releaseNextWork
+      summary: Release the next highest-priority work unit on a process path
+      description: >
+        Applies the release policy to a process path's `WorkPool` — the
+        ReleaseNextWork use case. Admits the pending work unit with the
+        earliest (most urgent) CPT, transitioning it Pending → Released.
+        This is continuous, priority-ordered admission (waveless), not a
+        batch/wave release. A release-fed pool enforces its WIP limit as a
+        hard invariant: releasing past the limit fails with `409`. Publishes
+        `WorkReleased`, which downstream fulfillment-execution consumes to
+        create a Task. This is a collection-level command on the path's work
+        pool (not scoped to a single work unit id, since the caller does not
+        choose which unit is released — the priority policy does), analogous
+        in REST terms to a resource-scoped bulk action.
+      tags: [Release]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: The released work unit, now in `Released` state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkUnitResponse"
+              example:
+                id: wu-482910
+                pathId: pick-a
+                cpt: "2026-08-21T12:00:00Z"
+                reference: order-77213-line-1
+                state: Released
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No work pool has been provisioned for this path yet (no work unit has ever been enqueued).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/not-found
+                title: Resource not found
+                status: 404
+                detail: "resource not found"
+                instance: /paths/pick-a/release
+        "409":
+          description: >
+            The pool is empty (nothing pending to release) or a release-fed
+            pool is already at its WIP limit.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/wip-limit-reached
+                title: Release-fed pool WIP limit reached
+                status: 409
+                detail: "WIP limit reached"
+                instance: /paths/pick-a/release
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /paths/{pathId}/telemetry:
+    get:
+      operationId: sampleBacklog
+      summary: Sample live backlog telemetry for a process path
+      description: >
+        Returns the current backlog depth/WIP read model for a process
+        path's work pool — the SampleBacklog use case. This is a projection
+        built from live `WorkPool` state, not persisted aggregate state.
+        Side effect: if the pool is over its alarm threshold, publishes
+        `BacklogThresholdBreached` (an existing, documented telemetry side
+        effect of sampling — it does not mutate the `WorkPool` or
+        `WorkUnit` aggregates themselves, so this remains a safe GET).
+      tags: [Telemetry]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Current backlog snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BacklogSnapshotResponse"
+              example:
+                pathId: pick-a
+                backlogDepth: 12
+                wip: 4
+                mode: ReleaseFed
+                overAlarmThreshold: false
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /paths/{pathId}/rebalance:
+    get:
+      operationId: rebalanceDecision
+      summary: Get the flow-balancing recommendation for a process path
+      description: >
+        Inspects a process path's live buffer telemetry (backlog vs. plan)
+        and recommends `ThrottleUpstream` (a flow-fed path over its alarm
+        threshold — slow admission upstream, Drum-Buffer-Rope with CPT as
+        the drum), `ReassignLabor` (a release-fed path saturated at its WIP
+        limit with backlog remaining — flag for headcount reassignment), or
+        `NoActionNeeded` — the RebalanceDecision use case. Side effect:
+        publishes `PathThrottled` or `LaborReassignmentFlagged` when a
+        non-default action is recommended (same read-only-GET-with-telemetry-side-effect
+        pattern as `/telemetry`). When a labor plan has been observed for
+        this path (see Labor Plan View), the response additionally includes
+        it as extra context under `laborPlan` — this is additive and does
+        not change the throttle/reassign decision logic itself.
+      tags: [Rebalance]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Rebalance recommendation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RebalanceResponse"
+              example:
+                pathId: pick-a
+                action: ThrottleUpstream
+                backlogDepth: 340
+                wip: 0
+                laborPlan:
+                  pathId: pick-a
+                  plannedHeads: 6
+                  plannedRate: 95.5
+                  plannedHours: 8
+                  observedAt: "2026-08-21T09:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /paths/{pathId}/labor-plan-view:
+    get:
+      operationId: getLaborPlanView
+      summary: Get the latest labor plan Workforce Management reported for a path
+      description: >
+        Returns the `LaborPlanObserved` read model — the latest
+        `planned_heads`/`planned_rate`/`planned_hours` Workforce Management
+        published on its `ShiftPlanCommitted` integration event for this
+        path, projected via the Kafka consumer (Task 7). This is a read-only
+        projection from a DIFFERENT bounded context's `ShiftPlan` concept —
+        it is never fed into this service's own `PathPlan`/`ShiftPlan`
+        aggregate or `CommitShiftPlan` use case. `404` until at least one
+        `ShiftPlanCommitted` event has been observed for the path.
+      tags: [Labor Plan View]
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: Latest observed labor plan for this path.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LaborPlanViewResponse"
+              example:
+                pathId: pick-a
+                plannedHeads: 6
+                plannedRate: 95.5
+                plannedHours: 8
+                observedAt: "2026-08-21T09:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: No `ShiftPlanCommitted` event has been observed for this path yet.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/not-found
+                title: Resource not found
+                status: 404
+                detail: "resource not found"
+                instance: /paths/pick-a/labor-plan-view
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /work-units/{id}/complete:
+    post:
+      operationId: recordCompletion
+      summary: Record completion of a released work unit
+      description: >
+        Finishes a released work unit — the RecordCompletion use case.
+        Transitions Released → Completed and publishes `WorkUnitCompleted`,
+        which updates backlog telemetry projections. Enforces the `WorkUnit`
+        aggregate's at-most-once-completion invariant: completing an already
+        completed unit, or one that was never released, returns `409`. This
+        endpoint is also the target of the additive `TaskCompleted` Kafka
+        consumer (Task 8) — fulfillment-execution's task completion drives
+        the exact same use case as this HTTP call.
+      tags: [Work Units]
+      parameters:
+        - $ref: "#/components/parameters/WorkUnitId"
+      responses:
+        "200":
+          description: The completed work unit, now in `Completed` state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkUnitResponse"
+              example:
+                id: wu-482910
+                pathId: pick-a
+                cpt: "2026-08-21T12:00:00Z"
+                reference: order-77213-line-1
+                state: Completed
+        "404":
+          description: No work unit exists with this id.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/not-found
+                title: Resource not found
+                status: 404
+                detail: "resource not found"
+                instance: /work-units/wu-482910/complete
+        "409":
+          description: The work unit was never released, or was already completed.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/work-unit-already-completed
+                title: Work unit already completed
+                status: 409
+                detail: "work unit is already completed"
+                instance: /work-units/wu-482910/complete
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /inventory-view/{sku}:
+    get:
+      operationId: getInventoryView
+      summary: Get the latest observed usable inventory for a SKU
+      description: >
+        Returns the `UsableInventoryObserved` read model — the latest
+        usable-quantity projection for a SKU, built from Inventory's
+        `StockReserved` (decrements) and `ReservationRevoked` (increments)
+        integration events, projected via the Kafka consumer (Task 7). Keyed
+        by SKU, not by process path — Inventory reservations are SKU-scoped,
+        with no natural path mapping. `404` until at least one event has
+        been observed for the SKU.
+      tags: [Inventory View]
+      parameters:
+        - $ref: "#/components/parameters/Sku"
+      responses:
+        "200":
+          description: Latest observed usable quantity for this SKU.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryViewResponse"
+              example:
+                sku: sku-88213
+                usableQuantity: 245
+                observedAt: "2026-08-21T09:00:00Z"
+        "404":
+          description: No inventory event has been observed for this SKU yet.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/not-found
+                title: Resource not found
+                status: 404
+                detail: "resource not found"
+                instance: /inventory-view/sku-88213
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  parameters:
+    PathId:
+      name: pathId
+      in: path
+      required: true
+      description: >
+        The process path's identifier — a named station that owns a queue
+        (unit-in → unit-out), e.g. a pick zone or pack line.
+      schema:
+        type: string
+        minLength: 1
+      example: pick-a
+    WorkUnitId:
+      name: id
+      in: path
+      required: true
+      description: The work unit's client-supplied identifier.
+      schema:
+        type: string
+        minLength: 1
+      example: wu-482910
+    Sku:
+      name: sku
+      in: path
+      required: true
+      description: The stock-keeping unit identifier this inventory view is projected for.
+      schema:
+        type: string
+        minLength: 1
+      example: sku-88213
+
+  responses:
+    BadRequest:
+      description: >
+        Malformed request body (invalid JSON), a missing required field, or
+        an invalid field value (e.g. negative quantity, empty path id).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://errors.wes-work-planning.warehouse-systems.dev/invalid-quantity
+            title: Invalid quantity
+            status: 400
+            detail: "quantity must be non-negative"
+            instance: /paths/pick-a/charge
+    NotFound:
+      description: No resource exists at this path/id.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://errors.wes-work-planning.warehouse-systems.dev/not-found
+            title: Resource not found
+            status: 404
+            detail: "resource not found"
+            instance: /paths/unknown-path/telemetry
+    InternalError:
+      description: An unexpected server-side failure (e.g. a repository or event-publisher error).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://errors.wes-work-planning.warehouse-systems.dev/internal-error
+            title: Internal server error
+            status: 500
+            detail: "event store unavailable"
+            instance: /paths/pick-a/charge
+
+  schemas:
+    Problem:
+      type: object
+      description: >
+        RFC 7807 (https://www.rfc-editor.org/rfc/rfc7807) Problem Details for
+        HTTP APIs. Every error response in this service uses this shape with
+        Content-Type application/problem+json.
+      properties:
+        type:
+          type: string
+          format: uri
+          description: >
+            A URI identifying the error category (does not need to resolve
+            to a real page). Stable per distinct error category in this
+            service.
+          example: https://errors.wes-work-planning.warehouse-systems.dev/work-unit-already-completed
+        title:
+          type: string
+          description: Fixed, category-level human-readable summary.
+          example: Work unit already completed
+        status:
+          type: integer
+          format: int32
+          description: Duplicates the HTTP status code (RFC 7807 requirement).
+          example: 409
+        detail:
+          type: string
+          description: The specific error message for this occurrence.
+          example: work unit is already completed
+        instance:
+          type: string
+          description: The request path that produced the error, omitted if there is no natural resource path.
+          example: /work-units/wu-482910/complete
+      required: [type, title, status, detail]
+
+    CPTBucket:
+      type: object
+      description: An exact CPT (Critical Pull Time) and the quantity due at it.
+      properties:
+        cpt:
+          type: string
+          format: date-time
+          description: The last moment a parcel in this bucket can be manifested and still make its truck.
+          example: "2026-08-21T12:00:00Z"
+        quantity:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Units due by this CPT.
+          example: 4200
+      required: [cpt, quantity]
+
+    ReceiveChargeForecastRequest:
+      type: object
+      properties:
+        buckets:
+          type: array
+          minItems: 1
+          description: At least one CPT/quantity bucket is required.
+          items:
+            $ref: "#/components/schemas/CPTBucket"
+      required: [buckets]
+
+    ChargeForecastResponse:
+      type: object
+      properties:
+        pathId:
+          type: string
+          example: pick-a
+        totalQuantity:
+          type: integer
+          format: int32
+          description: Sum of all bucket quantities.
+          example: 6000
+        buckets:
+          type: array
+          items:
+            $ref: "#/components/schemas/CPTBucket"
+        receivedAt:
+          type: string
+          format: date-time
+          description: When this forecast was recorded (server clock).
+          example: "2026-08-21T08:00:00Z"
+      required: [pathId, totalQuantity, buckets, receivedAt]
+
+    CommitShiftPlanRequest:
+      type: object
+      properties:
+        plannedHeads:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Headcount committed to this path for the shift. Must not exceed installedStations.
+          example: 6
+        installedStations:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Physical stations installed at this path.
+          example: 8
+        rateUnitsPerHour:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+          description: Service rate per head, in units/hour.
+          example: 95.5
+        hours:
+          type: number
+          format: double
+          exclusiveMinimum: true
+          minimum: 0
+          description: Length of the shift in hours.
+          example: 8
+      required: [plannedHeads, installedStations, rateUnitsPerHour, hours]
+
+    ShiftPlanResponse:
+      type: object
+      properties:
+        pathId:
+          type: string
+          example: pick-a
+        plannedHeads:
+          type: integer
+          format: int32
+          example: 6
+        installedStations:
+          type: integer
+          format: int32
+          example: 8
+        rateUnitsPerHour:
+          type: number
+          format: double
+          example: 95.5
+        hours:
+          type: number
+          format: double
+          example: 8
+        plannedThroughput:
+          type: number
+          format: double
+          description: plannedHeads × rateUnitsPerHour × hours.
+          example: 4584
+      required:
+        - pathId
+        - plannedHeads
+        - installedStations
+        - rateUnitsPerHour
+        - hours
+        - plannedThroughput
+
+    EnqueueWorkUnitRequest:
+      type: object
+      properties:
+        workUnitId:
+          type: string
+          minLength: 1
+          description: Client-supplied unique identifier for this work unit.
+          example: wu-482910
+        cpt:
+          type: string
+          format: date-time
+          description: This work unit's Critical Pull Time — drives release priority (earliest CPT first).
+          example: "2026-08-21T12:00:00Z"
+        reference:
+          type: string
+          minLength: 1
+          description: An external reference this work unit corresponds to (e.g. an order line).
+          example: order-77213-line-1
+      required: [workUnitId, cpt, reference]
+
+    WorkUnitState:
+      type: string
+      description: >
+        Pending (enqueued, not yet released) → Released (admitted into
+        active work) → Completed. At most one active assignment; cannot
+        complete twice or before release.
+      enum: [Pending, Released, Completed]
+      example: Pending
+
+    WorkUnitResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: wu-482910
+        pathId:
+          type: string
+          example: pick-a
+        cpt:
+          type: string
+          format: date-time
+          example: "2026-08-21T12:00:00Z"
+        reference:
+          type: string
+          example: order-77213-line-1
+        state:
+          $ref: "#/components/schemas/WorkUnitState"
+      required: [id, pathId, cpt, reference, state]
+
+    PoolMode:
+      type: string
+      description: >
+        ReleaseFed pools are volume-controlled by this service (WIP limit is
+        a hard invariant); FlowFed pools admit on priority only (WIP limit is
+        an alarm threshold, not enforced).
+      enum: [ReleaseFed, FlowFed]
+      example: ReleaseFed
+
+    BacklogSnapshotResponse:
+      type: object
+      properties:
+        pathId:
+          type: string
+          example: pick-a
+        backlogDepth:
+          type: integer
+          format: int32
+          description: Count of work units still pending release.
+          example: 12
+        wip:
+          type: integer
+          format: int32
+          description: Count of work units currently released and in progress.
+          example: 4
+        mode:
+          $ref: "#/components/schemas/PoolMode"
+        overAlarmThreshold:
+          type: boolean
+          description: Whether backlogDepth has crossed this pool's alarm threshold.
+          example: false
+      required: [pathId, backlogDepth, wip, mode, overAlarmThreshold]
+
+    RebalanceAction:
+      type: string
+      description: >
+        ThrottleUpstream (flow-fed path over alarm threshold — slow upstream
+        admission), ReassignLabor (release-fed path saturated at its WIP
+        limit with backlog remaining — flag for headcount reassignment), or
+        NoActionNeeded.
+      enum: [NoActionNeeded, ThrottleUpstream, ReassignLabor]
+      example: ThrottleUpstream
+
+    LaborPlanViewResponse:
+      type: object
+      description: >
+        The latest labor plan Workforce Management reported for a path — a
+        read-only projection, distinct from this service's own Shift Plan.
+      properties:
+        pathId:
+          type: string
+          example: pick-a
+        plannedHeads:
+          type: integer
+          format: int32
+          example: 6
+        plannedRate:
+          type: number
+          format: double
+          example: 95.5
+        plannedHours:
+          type: number
+          format: double
+          example: 8
+        observedAt:
+          type: string
+          format: date-time
+          description: When this service last observed a ShiftPlanCommitted event for this path.
+          example: "2026-08-21T09:00:00Z"
+      required: [pathId, plannedHeads, plannedRate, plannedHours, observedAt]
+
+    RebalanceResponse:
+      type: object
+      properties:
+        pathId:
+          type: string
+          example: pick-a
+        action:
+          $ref: "#/components/schemas/RebalanceAction"
+        backlogDepth:
+          type: integer
+          format: int32
+          example: 340
+        wip:
+          type: integer
+          format: int32
+          example: 0
+        laborPlan:
+          allOf:
+            - $ref: "#/components/schemas/LaborPlanViewResponse"
+          description: >
+            Present only if a labor plan has been observed for this path;
+            omitted entirely (not present as null) otherwise. Additive
+            context, does not affect `action`.
+      required: [pathId, action, backlogDepth, wip]
+
+    InventoryViewResponse:
+      type: object
+      properties:
+        sku:
+          type: string
+          example: sku-88213
+        usableQuantity:
+          type: integer
+          format: int32
+          description: >
+            Latest observed usable quantity for this SKU. Can be negative in
+            this projection if reservations were observed before the
+            corresponding stock-receipt event — that is expected of an
+            eventually-consistent read model and not itself an error.
+          example: 245
+        observedAt:
+          type: string
+          format: date-time
+          example: "2026-08-21T09:00:00Z"
+      required: [sku, usableQuantity, observedAt]

@@ -82,6 +82,21 @@ func TestPostChargeForecast(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("got status %d, want 201, body=%s", rec.Code, rec.Body.String())
 	}
+	if loc := rec.Header().Get("Location"); loc != "/paths/pick-a/charge" {
+		t.Fatalf("got Location %q, want /paths/pick-a/charge", loc)
+	}
+}
+
+func TestPostChargeForecast_MalformedJSONReturns400(t *testing.T) {
+	router := newTestRouter()
+	req := httptest.NewRequest(http.MethodPost, "/paths/pick-a/charge", bytes.NewReader([]byte("{not-json")))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestPostChargeForecast_InvalidQuantityReturns400(t *testing.T) {
@@ -111,6 +126,9 @@ func TestPostShiftPlan(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("got status %d, want 201, body=%s", rec.Code, rec.Body.String())
 	}
+	if loc := rec.Header().Get("Location"); loc != "/paths/pick-a/plan" {
+		t.Fatalf("got Location %q, want /paths/pick-a/plan", loc)
+	}
 }
 
 func TestPostShiftPlan_HeadsExceedStationsReturns400(t *testing.T) {
@@ -139,6 +157,21 @@ func TestPostWorkUnit(t *testing.T) {
 	rec := doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("got status %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if loc := rec.Header().Get("Location"); loc != "/work-units/wu-1" {
+		t.Fatalf("got Location %q, want /work-units/wu-1", loc)
+	}
+}
+
+func TestPostWorkUnit_MalformedJSONReturns400(t *testing.T) {
+	router := newTestRouter()
+	req := httptest.NewRequest(http.MethodPost, "/paths/pick-a/work-units", bytes.NewReader([]byte("not json at all")))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -214,6 +247,25 @@ func TestPostComplete_DoubleCompleteReturns409(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("got status %d, want 409, body=%s", rec.Code, rec.Body.String())
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("got Content-Type %q, want application/problem+json", ct)
+	}
+	var problem struct {
+		Type     string `json:"type"`
+		Title    string `json:"title"`
+		Status   int    `json:"status"`
+		Detail   string `json:"detail"`
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("unmarshal problem+json body: %v", err)
+	}
+	if problem.Status != http.StatusConflict {
+		t.Fatalf("got problem.status %d, want 409", problem.Status)
+	}
+	if problem.Instance != "/work-units/wu-1/complete" {
+		t.Fatalf("got instance %q, want /work-units/wu-1/complete", problem.Instance)
+	}
 }
 
 func TestGetTelemetry(t *testing.T) {
@@ -236,6 +288,31 @@ func TestGetTelemetry_UnknownPathReturns404(t *testing.T) {
 	rec := doJSON(t, router, http.MethodGet, "/paths/unknown-path/telemetry", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("got status %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("got Content-Type %q, want application/problem+json", ct)
+	}
+	var problem struct {
+		Type     string `json:"type"`
+		Title    string `json:"title"`
+		Status   int    `json:"status"`
+		Detail   string `json:"detail"`
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("unmarshal problem+json body: %v", err)
+	}
+	if problem.Type == "" || problem.Title == "" {
+		t.Fatalf("expected non-empty type/title, got %+v", problem)
+	}
+	if problem.Status != http.StatusNotFound {
+		t.Fatalf("got problem.status %d, want 404", problem.Status)
+	}
+	if problem.Detail == "" {
+		t.Fatalf("expected non-empty detail, got %+v", problem)
+	}
+	if problem.Instance != "/paths/unknown-path/telemetry" {
+		t.Fatalf("got instance %q, want /paths/unknown-path/telemetry", problem.Instance)
 	}
 }
 

@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -35,6 +36,16 @@ func pathIdParam(r *http.Request) (shared.PathId, error) {
 	return shared.NewPathId(chi.URLParam(r, "pathId"))
 }
 
+// decodeJSON decodes the request body into dst, writing an RFC-mapped 400
+// response and returning false on malformed JSON so callers can bail out.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		writeError(w, r, fmt.Errorf("%w: %v", errMalformedBody, err))
+		return false
+	}
+	return true
+}
+
 func toBucketDTOs(buckets []charge.CPTBucket) []cptBucketDTO {
 	out := make([]cptBucketDTO, len(buckets))
 	for i, b := range buckets {
@@ -56,13 +67,12 @@ func toWorkUnitResponseDTO(unit *workunit.WorkUnit) workUnitResponseDTO {
 func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	var body receiveChargeForecastRequestDTO
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, err)
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 
@@ -70,7 +80,7 @@ func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 	for i, b := range body.Buckets {
 		qty, err := shared.NewQuantity(b.Quantity)
 		if err != nil {
-			writeError(w, err)
+			writeError(w, r, err)
 			return
 		}
 		buckets[i] = usecases.CPTBucketInput{CPT: shared.NewCPT(b.CPT), Quantity: qty}
@@ -81,10 +91,11 @@ func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 		Buckets: buckets,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
+	w.Header().Set("Location", "/paths/"+forecast.PathId().String()+"/charge")
 	writeJSON(w, http.StatusCreated, chargeForecastResponseDTO{
 		PathId:        forecast.PathId().String(),
 		TotalQuantity: forecast.TotalQuantity().Value(),
@@ -96,29 +107,28 @@ func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	var body commitShiftPlanRequestDTO
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, err)
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 
 	heads, err := shared.NewStationCount(body.PlannedHeads)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	installed, err := shared.NewStationCount(body.InstalledStations)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 	rate, err := shared.NewRate(body.RateUnitsPerHour)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
@@ -130,11 +140,12 @@ func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 		Hours:             body.Hours,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	pathPlan, _ := shiftPlan.PathPlan(pathId)
+	w.Header().Set("Location", "/paths/"+pathId.String()+"/plan")
 	writeJSON(w, http.StatusCreated, toShiftPlanResponseDTO(pathPlan))
 }
 
@@ -152,13 +163,12 @@ func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
 func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	var body enqueueWorkUnitRequestDTO
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, err)
+	if !decodeJSON(w, r, &body) {
 		return
 	}
 
@@ -169,23 +179,24 @@ func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
 		Reference:  body.Reference,
 	})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
+	w.Header().Set("Location", "/work-units/"+unit.Id())
 	writeJSON(w, http.StatusCreated, toWorkUnitResponseDTO(unit))
 }
 
 func (h *Handlers) postRelease(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	unit, err := h.ReleaseNextWork.Execute(r.Context(), usecases.ReleaseNextWorkRequest{PathId: pathId})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
@@ -197,7 +208,7 @@ func (h *Handlers) postComplete(w http.ResponseWriter, r *http.Request) {
 
 	unit, err := h.RecordCompletion.Execute(r.Context(), usecases.RecordCompletionRequest{WorkUnitId: id})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
@@ -207,13 +218,13 @@ func (h *Handlers) postComplete(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) getTelemetry(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	snapshot, err := h.SampleBacklog.Execute(r.Context(), usecases.SampleBacklogRequest{PathId: pathId})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
@@ -229,13 +240,13 @@ func (h *Handlers) getTelemetry(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) getRebalance(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	rec, err := h.RebalanceDecision.Execute(r.Context(), usecases.RebalanceDecisionRequest{PathId: pathId})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
@@ -249,7 +260,7 @@ func (h *Handlers) getRebalance(w http.ResponseWriter, r *http.Request) {
 		if view, err := h.LaborPlanView.Execute(r.Context(), usecases.LaborPlanViewRequest{PathId: pathId}); err == nil {
 			resp.LaborPlan = toLaborPlanViewDTO(view)
 		} else if !errors.Is(err, ports.ErrNotFound) {
-			writeError(w, err)
+			writeError(w, r, err)
 			return
 		}
 	}
@@ -270,13 +281,13 @@ func toLaborPlanViewDTO(view laborview.LaborPlanObserved) *laborPlanViewDTO {
 func (h *Handlers) getLaborPlanView(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
 	view, err := h.LaborPlanView.Execute(r.Context(), usecases.LaborPlanViewRequest{PathId: pathId})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 
@@ -288,7 +299,7 @@ func (h *Handlers) getInventoryView(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.InventoryView.Execute(r.Context(), usecases.InventoryViewRequest{SKU: sku})
 	if err != nil {
-		writeError(w, err)
+		writeError(w, r, err)
 		return
 	}
 

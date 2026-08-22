@@ -70,7 +70,37 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 
 ## API
 
-All bodies/responses are JSON. Timestamps are RFC3339.
+All bodies/responses are JSON. Timestamps are RFC3339. Every endpoint is also
+documented exhaustively (full request/response schemas, every status code, a
+`Problem` component reused across every error response) in
+[`openapi.yaml`](./openapi.yaml).
+
+### Errors
+
+Every error response (4xx/5xx) is [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807)
+`application/problem+json`, not a bespoke shape:
+
+```sh
+curl -sD - localhost:8080/paths/does-not-exist/telemetry
+```
+
+```
+HTTP/1.1 404 Not Found
+Content-Type: application/problem+json
+
+{
+  "type": "https://errors.wes-work-planning.warehouse-systems.dev/not-found",
+  "title": "Resource not found",
+  "status": 404,
+  "detail": "resource not found",
+  "instance": "/paths/does-not-exist/telemetry"
+}
+```
+
+`type` is a stable per-category identifier (does not need to resolve to a
+real page), `title` is a fixed category summary, `status` duplicates the HTTP
+status code, `detail` is the specific error message for this occurrence, and
+`instance` is the request path that produced it.
 
 ### `POST /paths/{pathId}/charge` — ReceiveChargeForecast
 

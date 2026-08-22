@@ -5,8 +5,15 @@ package http
 
 import "time"
 
-type errorResponse struct {
-	Error string `json:"error"`
+// problemDetails is the RFC 7807 (https://www.rfc-editor.org/rfc/rfc7807)
+// Problem Details for HTTP APIs response shape used for every error
+// response, served with Content-Type: application/problem+json.
+type problemDetails struct {
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Status   int    `json:"status"`
+	Detail   string `json:"detail"`
+	Instance string `json:"instance,omitempty"`
 }
 
 type cptBucketDTO struct {
