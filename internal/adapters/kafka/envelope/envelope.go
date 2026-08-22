@@ -29,6 +29,7 @@ const (
 	TopicWorkPlanningEvents = "warehouse.work-planning.events"
 	TopicWorkforceEvents    = "warehouse.workforce.events"
 	TopicInventoryEvents    = "warehouse.inventory.events"
+	TopicFulfillmentEvents  = "warehouse.fulfillment.events"
 )
 
 // Event types this service consumes.
@@ -36,4 +37,5 @@ const (
 	EventTypeShiftPlanCommitted = "ShiftPlanCommitted"
 	EventTypeStockReserved      = "StockReserved"
 	EventTypeReservationRevoked = "ReservationRevoked"
+	EventTypeTaskCompleted      = "TaskCompleted"
 )

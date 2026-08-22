@@ -92,12 +92,14 @@ func run() error {
 		publisher = events.NewLogPublisher(logger)
 	}
 
+	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+
 	handlers := &inboundhttp.Handlers{
 		ReceiveChargeForecast: usecases.NewReceiveChargeForecast(charges, publisher, clock),
 		CommitShiftPlan:       usecases.NewCommitShiftPlan(plans, publisher, clock),
 		EnqueueWorkUnit:       usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock),
 		ReleaseNextWork:       usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
-		RecordCompletion:      usecases.NewRecordCompletion(workUnits, publisher, clock),
+		RecordCompletion:      recordCompletion,
 		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
 		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
 		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),
@@ -128,7 +130,7 @@ func run() error {
 		logger.Printf("consuming integration events from kafka brokers=%s", kafkaBrokers)
 		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
 		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
-		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, logger)
+		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, processedEvts, logger)
 		go func() {
 			if err := consumer.Run(consumerCtx); err != nil {
 				logger.Printf("kafka consumer stopped: %v", err)

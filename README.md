@@ -230,6 +230,13 @@ same `ports.EventPublisher` interface the log publisher does.
   `StockReserved` decrements, `ReservationRevoked` increments, the
   `UsableInventoryObserved` read model, keyed by SKU
   (`GET /inventory-view/{sku}`).
+- Topic `warehouse.fulfillment.events`, event type `TaskCompleted` — `data`:
+  `{"task_id","station_id","work_unit_id"}`. Closes the control loop's
+  feedback edge from fulfillment-execution back to this service:
+  `data.work_unit_id` is fed directly into the existing `RecordCompletion` use
+  case (`RecordCompletionRequest.WorkUnitId`), transitioning that work unit
+  from Released to Completed exactly as `POST /work-units/{id}/complete`
+  would. No new use case — this is additive wiring only.
 
 Setting `KAFKA_BROKERS` starts this consumer automatically, independent of
 `EVENT_PUBLISHER`.
@@ -240,7 +247,11 @@ Kafka is at-least-once. Every consumed event's `event_id` is recorded in
 `processed_events` (Postgres) / an in-memory set before its effect is
 applied; a redelivered `event_id` is skipped (and still acked) rather than
 re-applied. See `internal/application/usecases/observe_labor_plan.go` and
-`observe_inventory_change.go`.
+`observe_inventory_change.go`. `TaskCompleted` reuses this same mechanism from
+the inbound Kafka adapter itself (`internal/adapters/inbound/kafka/consumer.go`)
+since it calls `RecordCompletion` directly rather than through a projector use
+case; `RecordCompletion`'s own domain-level double-complete rejection is a
+second, independent safety net, not a substitute for it.
 
 ### Smoke-testing against the shared broker
 
@@ -260,6 +271,23 @@ curl localhost:8080/paths/pick-a/labor-plan-view
 
 Same pattern for `warehouse.inventory.events` / `StockReserved` /
 `GET /inventory-view/{sku}`.
+
+For `TaskCompleted`, first get a work unit into Released state (enqueue then
+release it), then publish the completion event and re-query the unit:
+
+```sh
+curl -X POST localhost:8080/paths/pick-a/work-units \
+  -d '{"workUnitId":"wu-1","cpt":"2026-08-21T23:00:00Z","reference":"ref-1"}'
+curl -X POST localhost:8080/paths/pick-a/release
+
+docker exec -i warehouse-kafka /opt/kafka/bin/kafka-console-producer.sh \
+  --broker-list localhost:9092 --topic warehouse.fulfillment.events <<'EOF'
+{"event_id":"evt-task-1","event_type":"TaskCompleted","occurred_at":"2026-08-21T23:05:00Z","source":"fulfillment-execution","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1"}}
+EOF
+
+curl localhost:8080/paths/pick-a/telemetry
+# work unit wu-1 is now Completed
+```
 
 ## Invariants
 

@@ -219,3 +219,65 @@ purpose. Unit-test: publishing the same event twice must not double-decrement
 - Do a REAL smoke test: with the shared Kafka broker running, actually publish
   a `ShiftPlanCommitted` message via `kafka-console-producer.sh` (or a small Go
   one-off) and curl `GET /paths/{pathId}/labor-plan-view` to see it reflected.
+
+---
+
+## Task 8 — Consume TaskCompleted (additive, do NOT touch existing domain code)
+
+Close the control loop's feedback edge (Execution -> Orchestration): consume
+`TaskCompleted` from fulfillment-execution and feed it into the EXISTING
+`RecordCompletion` use case — this is exactly what that use case is for, call
+it directly, no new use case needed. Strictly additive: new inbound adapter
+only, no change to `RecordCompletion`'s own logic, the `WorkUnit` aggregate, or
+any other existing code.
+
+### Envelope
+
+```json
+{
+  "event_id": "uuid-v4",
+  "event_type": "TaskCompleted",
+  "occurred_at": "2026-08-21T22:00:00Z",
+  "source": "fulfillment-execution",
+  "data": {"task_id": "...", "station_id": "...", "work_unit_id": "..."}
+}
+```
+
+### Kafka
+
+- New topic subscription on the EXISTING inbound Kafka consumer package
+  `internal/adapters/inbound/kafka/` (added in Task 7) — add a second topic,
+  `warehouse.fulfillment.events`, alongside the existing subscriptions to
+  `warehouse.workforce.events` and `warehouse.inventory.events`. Filter for
+  `event_type == "TaskCompleted"` on this new topic.
+- Mapping: `data.work_unit_id` -> `RecordCompletionRequest.WorkUnitId`. Call
+  the existing `RecordCompletion.Execute(ctx, RecordCompletionRequest{WorkUnitId:
+  data.work_unit_id})`.
+
+### Idempotency
+
+Reuse the SAME `processed_events` idempotency mechanism already added in Task 7
+(same table, same in-memory map) — insert this event's `event_id` before
+calling `RecordCompletion`; skip if already processed. Note `RecordCompletion`
+itself already rejects double-complete at the domain level (an existing
+invariant), so this is defense in depth, not the only safety net — but still
+required so a redelivered event does not surface a spurious error/retry loop.
+Unit-test: consuming the same `TaskCompleted` event_id twice does not call
+`RecordCompletion` a second time (and therefore never hits its
+already-completed error path from a mere redelivery).
+
+### Definition of done for Task 8
+
+- New topic subscription + handler compiles and is unit-tested (feed it a fake
+  envelope, assert `RecordCompletion` was invoked with the right WorkUnitId;
+  feed the same event_id twice, assert it was invoked only once).
+- Existing full suite (`go build ./...`, `go vet ./...`, `go test ./...`,
+  `go test ./... -race`) still green, unchanged, including everything from
+  Tasks 0-7.
+- README's Integration section gains this new topic consumed, exact schema.
+- REAL smoke test: with the shared broker running, publish a
+  `TaskCompleted`-shaped message via `kafka-console-producer.sh` (or a small Go
+  one-off) referencing a `work_unit_id` that is currently in Released state in
+  this service, and confirm it transitions to Completed (check via whatever
+  read path already exists, e.g. re-querying the work unit or its telemetry)
+  before declaring done.

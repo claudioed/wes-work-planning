@@ -64,3 +64,16 @@ Build the full bounded context described in CLAUDE.md. Work in this order; keep
 - README gains an Integration section. Do a REAL smoke test against the running
   shared broker before declaring done (publish a message, curl the view endpoint).
 - Full existing suite (build/vet/test/-race) must still be green afterward.
+
+## Task 8 — Consume TaskCompleted (additive, see CLAUDE.md's Task 8 section)
+- Add a THIRD topic subscription to the existing Task 7 Kafka consumer:
+  warehouse.fulfillment.events, filtering event_type "TaskCompleted".
+- Map data.work_unit_id -> RecordCompletionRequest.WorkUnitId and call the
+  existing RecordCompletion use case directly. Do not modify RecordCompletion.
+- Reuse the existing processed_events idempotency mechanism from Task 7.
+- Unit test: fake TaskCompleted envelope invokes RecordCompletion once;
+  redelivery of the same event_id does not invoke it again.
+- README's Integration section gains this new topic. REAL smoke test: with the
+  shared broker running, publish a TaskCompleted message for a work unit
+  currently in Released state and confirm it transitions to Completed.
+- Full existing suite (build/vet/test/-race), including Tasks 0-7, must stay green.

@@ -12,6 +12,7 @@ import (
 	kafkago "github.com/segmentio/kafka-go"
 
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/envelope"
+	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
@@ -34,17 +35,30 @@ type inventoryEventData struct {
 	DemandRef string `json:"demand_ref"`
 }
 
-// Consumer consumes warehouse.workforce.events and warehouse.inventory.events
-// and projects them into the labor-plan-view and inventory-view read models.
-type Consumer struct {
-	workforceReader  *kafkago.Reader
-	inventoryReader  *kafkago.Reader
-	observeLabor     *usecases.ObserveLaborPlan
-	observeInventory *usecases.ObserveInventoryChange
-	logger           *log.Logger
+// taskCompletedData is fulfillment-execution's TaskCompleted payload.
+type taskCompletedData struct {
+	TaskId     string `json:"task_id"`
+	StationId  string `json:"station_id"`
+	WorkUnitId string `json:"work_unit_id"`
 }
 
-func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, logger *log.Logger) *Consumer {
+// Consumer consumes warehouse.workforce.events, warehouse.inventory.events,
+// and warehouse.fulfillment.events. The first two are projected into the
+// labor-plan-view and inventory-view read models; TaskCompleted from the
+// third is fed directly into the existing RecordCompletion use case to close
+// the control loop's feedback edge from Execution back to this service.
+type Consumer struct {
+	workforceReader   *kafkago.Reader
+	inventoryReader   *kafkago.Reader
+	fulfillmentReader *kafkago.Reader
+	observeLabor      *usecases.ObserveLaborPlan
+	observeInventory  *usecases.ObserveInventoryChange
+	recordCompletion  *usecases.RecordCompletion
+	processed         ports.ProcessedEventRepo
+	logger            *log.Logger
+}
+
+func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, processed ports.ProcessedEventRepo, logger *log.Logger) *Consumer {
 	return &Consumer{
 		workforceReader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
@@ -56,8 +70,15 @@ func NewConsumer(brokers []string, groupID string, observeLabor *usecases.Observ
 			GroupID: groupID,
 			Topic:   envelope.TopicInventoryEvents,
 		}),
+		fulfillmentReader: kafkago.NewReader(kafkago.ReaderConfig{
+			Brokers: brokers,
+			GroupID: groupID,
+			Topic:   envelope.TopicFulfillmentEvents,
+		}),
 		observeLabor:     observeLabor,
 		observeInventory: observeInventory,
+		recordCompletion: recordCompletion,
+		processed:        processed,
 		logger:           logger,
 	}
 }
@@ -65,16 +86,18 @@ func NewConsumer(brokers []string, groupID string, observeLabor *usecases.Observ
 func (c *Consumer) Close() error {
 	err1 := c.workforceReader.Close()
 	err2 := c.inventoryReader.Close()
-	return errors.Join(err1, err2)
+	err3 := c.fulfillmentReader.Close()
+	return errors.Join(err1, err2, err3)
 }
 
-// Run consumes both topics until ctx is cancelled.
+// Run consumes all three topics until ctx is cancelled.
 func (c *Consumer) Run(ctx context.Context) error {
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	go func() { errCh <- c.consumeLoop(ctx, c.workforceReader, c.handleWorkforceEvent) }()
 	go func() { errCh <- c.consumeLoop(ctx, c.inventoryReader, c.handleInventoryEvent) }()
+	go func() { errCh <- c.consumeLoop(ctx, c.fulfillmentReader, c.handleFulfillmentEvent) }()
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		if err := <-errCh; err != nil {
 			return err
 		}
@@ -158,6 +181,33 @@ func (c *Consumer) handleInventoryEvent(ctx context.Context, env envelope.Envelo
 		Delta:      delta * data.Quantity,
 		ObservedAt: env.OccurredAt,
 	})
+	return err
+}
+
+// handleFulfillmentEvent filters for TaskCompleted and feeds it into the
+// existing RecordCompletion use case. Idempotency reuses the same
+// processed_events mechanism as the Task 7 projectors: RecordCompletion
+// itself already rejects a double-complete at the domain level, but marking
+// the event_id here avoids a spurious error/retry on mere redelivery.
+func (c *Consumer) handleFulfillmentEvent(ctx context.Context, env envelope.Envelope) error {
+	if env.EventType != envelope.EventTypeTaskCompleted {
+		return nil
+	}
+
+	var data taskCompletedData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return err
+	}
+
+	alreadyProcessed, err := c.processed.TryMarkProcessed(ctx, env.EventId, env.OccurredAt)
+	if err != nil {
+		return err
+	}
+	if alreadyProcessed {
+		return nil
+	}
+
+	_, err = c.recordCompletion.Execute(ctx, usecases.RecordCompletionRequest{WorkUnitId: data.WorkUnitId})
 	return err
 }
 
