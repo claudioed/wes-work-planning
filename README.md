@@ -218,6 +218,23 @@ KAFKA_BROKERS="localhost:9092" \
   go test -tags=integration ./internal/adapters/inbound/kafka/...
 ```
 
+### BDD / Acceptance tests
+
+Executable specifications live in `features/` as Gherkin `.feature` files and
+are run with [godog](https://github.com/cucumber/godog), the official Cucumber
+BDD framework for Go. The suite is black-box: it starts the real chi router
+over the in-memory adapters in an `httptest` server and drives the REST API
+with real HTTP calls (`features_test.go` at the repo root).
+
+```sh
+go test ./... -run TestFeatures -v
+```
+
+Scenarios cover committing a ShiftPlan against installed-station capacity,
+CPT-priority Release with at-most-once handout, RecordCompletion plus the
+backlog telemetry read model, and flow-balancing rebalance decisions. CI runs
+them in the `bdd` job.
+
 ## Integration
 
 This service both publishes and consumes integration events over Kafka
