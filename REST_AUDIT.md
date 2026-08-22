@@ -341,7 +341,18 @@ $ python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"
 YAML OK, jobs: ['lint-test', 'openapi-lint', 'mutation']
 ```
 
-GitHub Actions verification (pushed to `main` — this repo's established
-branch convention from Tasks 7/8/10, all of which committed straight to
-`main`; the fulfillment-execution PR-branch exception in REST_API_TASK.md
-does not apply here) is reported below once the run completes.
+**GitHub Actions verification (real, on GitHub's runners):** pushed to
+`main` (commit `b09596a` — this repo's established branch convention from
+Tasks 7/8/10, all of which committed straight to `main`; the
+fulfillment-execution PR-branch exception in REST_API_TASK.md does not apply
+here) and watched via `gh run watch 32578599026 --exit-status`:
+
+```
+✓ lint-test in 39s (ID 97044501419)      — unchanged job, still green
+✓ openapi-lint in 28s (ID 97044501644)   — NEW job: Spectral install + lint, all steps green
+- mutation (ID 97044501888)              — correctly skipped (not workflow_dispatch/schedule)
+WATCH EXIT: 0
+```
+
+Both required jobs passed on real infrastructure; `mutation` skipped exactly
+as designed (push-triggered, not dispatch/schedule).
