@@ -73,7 +73,7 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 All bodies/responses are JSON. Timestamps are RFC3339. Every endpoint is also
 documented exhaustively (full request/response schemas, every status code, a
 `Problem` component reused across every error response) in
-[`openapi.yaml`](./openapi.yaml).
+[`apis/openapi.yaml`](./apis/openapi.yaml).
 
 ### Errors
 

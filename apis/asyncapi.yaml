@@ -1,0 +1,756 @@
+asyncapi: 2.6.0
+
+info:
+  title: WES Work Planning & Release — Domain Events
+  version: "1.0.0"
+  description: |
+    Asynchronous event contract for the **Work Planning & Release** bounded
+    context, the core domain of the WES (Warehouse Execution System)
+    subdomain. This service is the "conductor" of the distribution centre: it
+    turns a shift's charge (volume due by each CPT) into a committed plan
+    (rate x heads per process path), releases work continuously and
+    waveless-ly into per-path work pools, and performs flow balancing
+    (Drum-Buffer-Rope, with CPT as the drum) from live buffer telemetry. It
+    sits downstream of WMS planning/inventory and upstream of WCS equipment
+    control.
+
+    ## Message format
+
+    Every message on this channel is a **CloudEvents 1.0 structured-mode**
+    JSON document: the CloudEvents context attributes and the event-specific
+    `data` payload travel together in a single JSON body with content type
+    `application/cloudevents+json`. The `source` context attribute is always
+    `/warehouse/wes-work-planning`, `subject` carries the identifier of the
+    aggregate instance that raised the event, and `data` is described per
+    message below.
+
+    ## `type` naming convention
+
+    The CloudEvents `type` attribute follows a reverse-DNS dotted convention
+    shared by every bounded context in this program:
+
+    ```
+    com.warehouse.<subdomain>.<bounded-context>.<entity>.<EventName>
+    ```
+
+    All segments are lowercase except the final PascalCase event name, which
+    matches the past-tense domain event name used in the code. For this
+    service the subdomain is `wes` and the bounded context is
+    `work-planning`, so for example:
+
+    ```
+    com.warehouse.wes.work-planning.workunit.WorkReleased
+    com.warehouse.wes.work-planning.charge.ChargeForecastReceived
+    ```
+
+    The `entity` segment names the aggregate (or aggregate cluster) that
+    raises the event: `charge` for the ChargeForecast aggregate, `plan` for
+    ShiftPlan/PathPlan, `workpool` for the WorkPool aggregate and the flow
+    balancing decisions taken against it, and `workunit` for the WorkUnit
+    aggregate.
+
+    ## Catalog completeness vs. what is actually published
+
+    This document is the **complete catalog** of the past-tense domain events
+    declared by this bounded context (see `internal/domain/shared/events.go`),
+    so that it is a usable reference for the whole domain model. Not every
+    catalogued event is emitted onto Kafka today: the outbound adapter
+    (`internal/adapters/outbound/kafka/publisher.go`) only sees the events
+    that application use cases actually hand to `EventPublisher.Publish`. Any
+    message that is not wired to the outbound adapter says so explicitly in
+    its own `description`. Note also that Kafka publication is opt-in at
+    runtime via the `EVENT_PUBLISHER=kafka` environment variable; with the
+    default `EVENT_PUBLISHER=log` the same events are only written to the log
+    publisher.
+
+    ## What this service consumes from other bounded contexts
+
+    Work Planning is unusual in this program in that it is both a producer
+    and a consumer of integration events. Those inbound streams are **not**
+    part of this channel and are owned by their own bounded contexts; they
+    are listed here only for orientation. This service also consumes
+    `ShiftPlanCommitted` from workforce-management on
+    `warehouse.workforce.events` (projected into the read-only
+    `LaborPlanObserved` view — deliberately *not* fed into this context's own
+    ShiftPlan aggregate, which is a different model that happens to share the
+    name), `StockReserved` and `ReservationRevoked` from inventory-storage on
+    `warehouse.inventory.events` (projected into the SKU-keyed
+    `UsableInventoryObserved` view), and `TaskCompleted` from
+    fulfillment-execution on `warehouse.fulfillment.events` (fed into the
+    `RecordCompletion` use case to close the execution feedback loop). All
+    consumer paths are idempotent under at-least-once redelivery.
+  contact:
+    name: WES Work Planning Team
+    url: https://warehouse-systems.internal/teams/wes-work-planning
+    email: wes-work-planning@warehouse-systems.internal
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+tags:
+  - name: work-planning
+    description: >-
+      The Work Planning & Release bounded context — the core domain of the WES
+      subdomain, responsible for planning the shift and releasing work.
+  - name: charge
+    description: >-
+      Events raised by the ChargeForecast aggregate — the volume that must
+      clear, bucketed by CPT.
+  - name: plan
+    description: >-
+      Events raised by the ShiftPlan / PathPlan aggregates — the committed
+      split of headcount and rate across process paths.
+  - name: workpool
+    description: >-
+      Events raised by the WorkPool aggregate and by flow balancing against
+      it — backlog telemetry, throttling and labor reassignment decisions.
+  - name: workunit
+    description: >-
+      Events raised by the WorkUnit aggregate — a releasable unit of work
+      carrying a CPT, from creation through release to completion.
+
+servers:
+  production:
+    url: kafka.warehouse-systems.internal:9092
+    protocol: kafka
+    description: >-
+      Production Kafka cluster shared by every warehouse-systems bounded
+      context. Locally, a broker is available at localhost:9092 via
+      ~/warehouse-systems/docker-compose.kafka.yml.
+
+defaultContentType: application/cloudevents+json
+
+channels:
+  warehouse.work-planning.events:
+    description: >-
+      The outbound topic owned by the Work Planning & Release bounded context
+      (`envelope.TopicWorkPlanningEvents` in the code). Every domain event
+      this service emits is written here, keyed by the CloudEvents `id`.
+    subscribe:
+      operationId: consumeWorkPlanningEvents
+      summary: Consume domain events emitted by WES Work Planning & Release.
+      description: >-
+        Subscribe to this channel to receive every past-tense domain event
+        raised by the Work Planning & Release bounded context. Messages are
+        CloudEvents 1.0 structured-mode JSON. Consumers must be idempotent:
+        delivery is at-least-once, and the CloudEvents `id` attribute is the
+        de-duplication key. Consumers should also ignore `type` values they
+        do not recognise, since new event types may be added to this channel
+        without a major version bump.
+      tags:
+        - name: work-planning
+      message:
+        oneOf:
+          - $ref: "#/components/messages/ChargeForecastReceived"
+          - $ref: "#/components/messages/ShiftPlanCommitted"
+          - $ref: "#/components/messages/WorkUnitCreated"
+          - $ref: "#/components/messages/WorkReleased"
+          - $ref: "#/components/messages/WorkUnitCompleted"
+          - $ref: "#/components/messages/BacklogThresholdBreached"
+          - $ref: "#/components/messages/RateDeviationDetected"
+          - $ref: "#/components/messages/PathThrottled"
+          - $ref: "#/components/messages/LaborReassignmentFlagged"
+
+components:
+  messages:
+    ChargeForecastReceived:
+      name: ChargeForecastReceived
+      title: Charge Forecast Received
+      summary: A shift's charge forecast was recorded for a process path.
+      description: >-
+        Raised by the ChargeForecast aggregate when `ReceiveChargeForecast`
+        records the volume due for a process path, bucketed by CPT. Actively
+        published to `warehouse.work-planning.events` by the outbound Kafka
+        adapter; the published `data` carries only `path_id`, since the CPT
+        buckets themselves are read back over the REST API rather than
+        broadcast.
+      contentType: application/cloudevents+json
+      tags:
+        - name: charge
+      payload:
+        $ref: "#/components/schemas/ChargeForecastReceivedEvent"
+      examples:
+        - name: chargeForecastReceived
+          summary: Charge forecast recorded for the pick-to-tote path.
+          payload:
+            specversion: "1.0"
+            id: 4f1c2a7e-9d31-4a6b-8f0e-6b2c1d5e7a90
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.charge.ChargeForecastReceived
+            subject: pick-to-tote
+            time: "2026-08-21T22:00:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+
+    ShiftPlanCommitted:
+      name: ShiftPlanCommitted
+      title: Shift Plan Committed
+      summary: A path's headcount, rate and hours split was committed.
+      description: >-
+        Raised by the ShiftPlan aggregate when `CommitShiftPlan` commits the
+        rate x heads x hours split for a process path, after validating the
+        invariant `plannedHeads <= installedStations`. Actively published to
+        `warehouse.work-planning.events`; the published `data` carries only
+        `path_id`. Beware the name collision: workforce-management publishes
+        an unrelated `ShiftPlanCommitted` on `warehouse.workforce.events`
+        that this service consumes into a read-only view. They are different
+        models in different bounded contexts and must not be conflated.
+      contentType: application/cloudevents+json
+      tags:
+        - name: plan
+      payload:
+        $ref: "#/components/schemas/ShiftPlanCommittedEvent"
+      examples:
+        - name: shiftPlanCommitted
+          summary: Shift plan committed for the pack-singles path.
+          payload:
+            specversion: "1.0"
+            id: 8a3d6c11-52b7-4f0d-9c14-3e7a5b8d2f46
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.plan.ShiftPlanCommitted
+            subject: pack-singles
+            time: "2026-08-21T22:05:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pack-singles
+
+    WorkUnitCreated:
+      name: WorkUnitCreated
+      title: Work Unit Created
+      summary: A new work unit was enqueued into a path's work pool.
+      description: >-
+        Raised by the WorkUnit aggregate when `EnqueueWorkUnit` admits a new
+        releasable unit of work (carrying its CPT) into the process path's
+        work pool. The unit is queued, not yet released. Actively published
+        to `warehouse.work-planning.events`; the published `data` carries
+        `path_id` and `work_unit_id`.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workunit
+      payload:
+        $ref: "#/components/schemas/WorkUnitCreatedEvent"
+      examples:
+        - name: workUnitCreated
+          summary: A pick task was enqueued into the pick-to-tote pool.
+          payload:
+            specversion: "1.0"
+            id: c25b9f83-7e64-4a19-b8d2-0f5a3c6e1b47
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workunit.WorkUnitCreated
+            subject: wu-10231
+            time: "2026-08-21T22:10:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+              work_unit_id: wu-10231
+
+    WorkReleased:
+      name: WorkReleased
+      title: Work Released
+      summary: The release policy admitted a work unit into active work.
+      description: >-
+        Raised by the WorkPool aggregate when `ReleaseNextWork` applies the
+        release policy and admits the highest-priority (earliest-CPT) queued
+        work unit into active work. This is the primary integration event of
+        this bounded context: fulfillment-execution consumes it and turns it
+        into a Task. Actively published to `warehouse.work-planning.events`.
+        The outbound adapter enriches the `data` payload with the unit's
+        `cpt` and `ref` by reading the WorkUnit repository, since the domain
+        event itself only carries the identifiers.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workunit
+      payload:
+        $ref: "#/components/schemas/WorkReleasedEvent"
+      examples:
+        - name: workReleased
+          summary: A pick task was released into the pick-to-tote path.
+          payload:
+            specversion: "1.0"
+            id: 1d7e4b90-3c58-4d22-9a6f-8b1c0e5d7a23
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workunit.WorkReleased
+            subject: wu-10231
+            time: "2026-08-21T22:12:30Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+              work_unit_id: wu-10231
+              cpt: "2026-08-22T02:00:00Z"
+              ref: order-88421-line-3
+
+    WorkUnitCompleted:
+      name: WorkUnitCompleted
+      title: Work Unit Completed
+      summary: A released work unit finished.
+      description: >-
+        Raised by the WorkUnit aggregate when `RecordCompletion` marks a
+        released unit as done — either from the REST endpoint or from a
+        `TaskCompleted` event consumed off `warehouse.fulfillment.events`.
+        The aggregate refuses a double-complete. Actively published to
+        `warehouse.work-planning.events`; the published `data` carries
+        `path_id` and `work_unit_id`.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workunit
+      payload:
+        $ref: "#/components/schemas/WorkUnitCompletedEvent"
+      examples:
+        - name: workUnitCompleted
+          summary: A pick task completed on the pick-to-tote path.
+          payload:
+            specversion: "1.0"
+            id: 6b0f2d47-1a93-4e75-8c3b-2d9e6f4a1c58
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workunit.WorkUnitCompleted
+            subject: wu-10231
+            time: "2026-08-21T22:19:45Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+              work_unit_id: wu-10231
+
+    BacklogThresholdBreached:
+      name: BacklogThresholdBreached
+      title: Backlog Threshold Breached
+      summary: A path's backlog depth crossed its alarm threshold.
+      description: >-
+        Raised by the WorkPool aggregate when `SampleBacklog` observes that
+        the pool's backlog depth has crossed the alarm threshold — the buffer
+        signal that drives flow balancing. Actively published to
+        `warehouse.work-planning.events`; the published `data` carries only
+        `path_id`. Consumers wanting the depth and rate numbers should read
+        the telemetry projection over REST rather than infer them here.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workpool
+      payload:
+        $ref: "#/components/schemas/BacklogThresholdBreachedEvent"
+      examples:
+        - name: backlogThresholdBreached
+          summary: The pack-singles buffer went over its alarm threshold.
+          payload:
+            specversion: "1.0"
+            id: 9c4a1e60-8b72-4d31-a5f9-7e2c3b0d6f18
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workpool.BacklogThresholdBreached
+            subject: pack-singles
+            time: "2026-08-21T22:25:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pack-singles
+
+    RateDeviationDetected:
+      name: RateDeviationDetected
+      title: Rate Deviation Detected
+      summary: A path's actual throughput deviated materially from plan.
+      description: >-
+        Raised when a process path's observed throughput diverges materially
+        from the rate committed in its PathPlan — the plan-vs-actual signal
+        for flow balancing. **Not yet wired to the outbound Kafka adapter —
+        documented here as part of the domain-event catalog, in-process only
+        today.** The event type is declared in
+        `internal/domain/shared/events.go` and the publisher's payload switch
+        already handles it, but no application use case currently raises it,
+        so nothing is emitted onto the topic. The example below shows the
+        shape it would take once wired.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workpool
+      payload:
+        $ref: "#/components/schemas/RateDeviationDetectedEvent"
+      examples:
+        - name: rateDeviationDetected
+          summary: Actual rate on pick-to-tote drifted away from plan.
+          payload:
+            specversion: "1.0"
+            id: 2e8b5c34-6f19-4a07-9d52-1c7a4e3b8f60
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workpool.RateDeviationDetected
+            subject: pick-to-tote
+            time: "2026-08-21T22:30:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+
+    PathThrottled:
+      name: PathThrottled
+      title: Path Throttled
+      summary: Flow balancing decided to throttle upstream release into a path.
+      description: >-
+        Raised by `RebalanceDecision` when a flow-fed pool is over its alarm
+        threshold and the recommendation is to throttle upstream release —
+        the rope in Drum-Buffer-Rope pulling back on a saturated buffer.
+        Actively published to `warehouse.work-planning.events`; the published
+        `data` carries only `path_id`.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workpool
+      payload:
+        $ref: "#/components/schemas/PathThrottledEvent"
+      examples:
+        - name: pathThrottled
+          summary: Upstream release into pack-singles was throttled.
+          payload:
+            specversion: "1.0"
+            id: 7f3c8a25-4d16-4b93-8e07-5a2b9c1d4e73
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workpool.PathThrottled
+            subject: pack-singles
+            time: "2026-08-21T22:31:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pack-singles
+
+    LaborReassignmentFlagged:
+      name: LaborReassignmentFlagged
+      title: Labor Reassignment Flagged
+      summary: Flow balancing recommended moving labor to relieve a path.
+      description: >-
+        Raised by `RebalanceDecision` when a release-fed pool is at its WIP
+        limit with backlog still queued: releasing more work cannot help, so
+        the recommendation is to move heads onto the path instead. Actively
+        published to `warehouse.work-planning.events`; the published `data`
+        carries only `path_id`. Workforce Management is the intended reader.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workpool
+      payload:
+        $ref: "#/components/schemas/LaborReassignmentFlaggedEvent"
+      examples:
+        - name: laborReassignmentFlagged
+          summary: Labor reassignment recommended for pick-to-tote.
+          payload:
+            specversion: "1.0"
+            id: 3a9d7e52-0c48-4f61-b2d8-6e4c1a5b9f27
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workpool.LaborReassignmentFlagged
+            subject: pick-to-tote
+            time: "2026-08-21T22:33:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+
+  schemas:
+    CloudEventBase:
+      type: object
+      title: CloudEvent 1.0 context attributes
+      description: >-
+        The CloudEvents 1.0 structured-mode context attributes common to every
+        message on this channel.
+      required:
+        - specversion
+        - id
+        - source
+        - type
+      properties:
+        specversion:
+          type: string
+          description: The CloudEvents specification version. Always "1.0".
+          enum: ["1.0"]
+        id:
+          type: string
+          format: uuid
+          description: >-
+            Unique identifier for this event occurrence, a UUID v4 generated
+            at publish time. Combined with `source` it is the de-duplication
+            key consumers must use for at-least-once delivery.
+          minLength: 1
+        source:
+          type: string
+          format: uri-reference
+          description: >-
+            The context that emitted the event. Always
+            `/warehouse/wes-work-planning` for messages on this channel.
+          enum: ["/warehouse/wes-work-planning"]
+        type:
+          type: string
+          description: >-
+            The event type, in the form
+            `com.warehouse.wes.work-planning.<entity>.<EventName>`.
+        subject:
+          type: string
+          description: >-
+            The identifier of the aggregate instance the event is about — a
+            process path id for charge/plan/work-pool events, a work unit id
+            for work unit events.
+        time:
+          type: string
+          format: date-time
+          description: >-
+            RFC3339 timestamp of when the domain event occurred, taken from
+            the domain clock rather than from publish time.
+        datacontenttype:
+          type: string
+          description: Media type of the `data` member. Always "application/json".
+          enum: ["application/json"]
+
+    ChargeForecastReceivedEvent:
+      title: ChargeForecastReceived CloudEvent
+      description: CloudEvent envelope for a recorded charge forecast.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.charge.ChargeForecastReceived"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path the charge forecast was
+                    recorded for.
+
+    ShiftPlanCommittedEvent:
+      title: ShiftPlanCommitted CloudEvent
+      description: CloudEvent envelope for a committed shift plan.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.plan.ShiftPlanCommitted"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path whose plan was committed.
+
+    WorkUnitCreatedEvent:
+      title: WorkUnitCreated CloudEvent
+      description: CloudEvent envelope for a newly enqueued work unit.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workunit.WorkUnitCreated"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+                - work_unit_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path whose work pool the unit
+                    was enqueued into.
+                work_unit_id:
+                  type: string
+                  description: Identifier of the newly created work unit.
+
+    WorkReleasedEvent:
+      title: WorkReleased CloudEvent
+      description: >-
+        CloudEvent envelope for a work unit admitted into active work by the
+        release policy.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workunit.WorkReleased"]
+            data:
+              type: object
+              description: >-
+                Payload published by the outbound Kafka adapter, enriched
+                from the WorkUnit repository with the unit's CPT and
+                reference.
+              required:
+                - path_id
+                - work_unit_id
+                - cpt
+                - ref
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path the work was released
+                    into.
+                work_unit_id:
+                  type: string
+                  description: Identifier of the released work unit.
+                cpt:
+                  type: string
+                  description: >-
+                    RFC3339 Critical Pull Time of the released unit — the
+                    last moment it can be manifested and still make its
+                    truck. Empty string if the unit could not be re-read at
+                    publish time.
+                ref:
+                  type: string
+                  description: >-
+                    Caller-supplied business reference for the unit (for
+                    example an order line). Empty string if the unit could
+                    not be re-read at publish time.
+
+    WorkUnitCompletedEvent:
+      title: WorkUnitCompleted CloudEvent
+      description: CloudEvent envelope for a completed work unit.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workunit.WorkUnitCompleted"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+                - work_unit_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path the completed unit
+                    belonged to.
+                work_unit_id:
+                  type: string
+                  description: Identifier of the completed work unit.
+
+    BacklogThresholdBreachedEvent:
+      title: BacklogThresholdBreached CloudEvent
+      description: CloudEvent envelope for a backlog alarm threshold breach.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workpool.BacklogThresholdBreached"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path whose backlog crossed its
+                    alarm threshold.
+
+    RateDeviationDetectedEvent:
+      title: RateDeviationDetected CloudEvent
+      description: >-
+        CloudEvent envelope for a plan-vs-actual rate deviation. Catalog-only
+        today — no use case currently raises this event.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workpool.RateDeviationDetected"]
+            data:
+              type: object
+              description: >-
+                Payload the outbound adapter's type switch would produce for
+                this event once a use case raises it.
+              required:
+                - path_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path whose actual rate deviated
+                    from plan.
+
+    PathThrottledEvent:
+      title: PathThrottled CloudEvent
+      description: CloudEvent envelope for an upstream release throttle decision.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workpool.PathThrottled"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path whose upstream release was
+                    throttled.
+
+    LaborReassignmentFlaggedEvent:
+      title: LaborReassignmentFlagged CloudEvent
+      description: CloudEvent envelope for a labor reassignment recommendation.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workpool.LaborReassignmentFlagged"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+              properties:
+                path_id:
+                  type: string
+                  description: >-
+                    Identifier of the process path labor should be moved
+                    onto.
