@@ -39,7 +39,7 @@ func newTestRouter() http.Handler {
 		InventoryView:         usecases.NewInventoryView(inventoryViews),
 	}
 
-	return inboundhttp.NewRouter(h)
+	return inboundhttp.NewRouter(h, "wes-work-planning", nil)
 }
 
 func doJSON(t *testing.T, router http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -368,7 +368,7 @@ func TestGetLaborPlanView_ReturnsObservedPlanAndSurfacesInRebalance(t *testing.T
 		RebalanceDecision: usecases.NewRebalanceDecision(pools, publisher, clock),
 		LaborPlanView:     usecases.NewLaborPlanView(laborPlanViews),
 	}
-	router := inboundhttp.NewRouter(h)
+	router := inboundhttp.NewRouter(h, "wes-work-planning", nil)
 
 	enqueueBody := map[string]any{
 		"workUnitId": "wu-1",
@@ -423,7 +423,7 @@ func TestGetInventoryView_ReturnsObservedQuantity(t *testing.T) {
 	}
 
 	h := &inboundhttp.Handlers{InventoryView: usecases.NewInventoryView(inventoryViews)}
-	router := inboundhttp.NewRouter(h)
+	router := inboundhttp.NewRouter(h, "wes-work-planning", nil)
 
 	rec := doJSON(t, router, http.MethodGet, "/inventory-view/sku-1", nil)
 	if rec.Code != http.StatusOK {

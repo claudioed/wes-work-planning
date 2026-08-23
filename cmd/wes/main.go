@@ -6,7 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,23 +20,51 @@ import (
 	outboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/outbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 )
 
+// serviceName is this service's identity in OTel resource attributes and
+// span/metric scopes; OTEL_SERVICE_NAME can override it.
+const serviceName = "wes-work-planning"
+
 func main() {
 	if err := run(); err != nil {
-		log.Fatal(err)
+		slog.Error("service exited with error", "error", err)
+		os.Exit(1)
 	}
 }
 
 func run() error {
+	logger := newLogger(getenv("LOG_LEVEL", "info"))
+	slog.SetDefault(logger)
+
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	databaseURL := os.Getenv("DATABASE_URL")
 	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
 	eventPublisherKind := getenv("EVENT_PUBLISHER", "log")
+	otelServiceName := getenv("OTEL_SERVICE_NAME", serviceName)
 
-	logger := log.New(os.Stdout, "wes ", log.LstdFlags)
+	shutdownTelemetry, err := telemetry.Setup(
+		context.Background(),
+		otelServiceName,
+		getenv("SERVICE_VERSION", telemetry.DefaultServiceVersion),
+		getenv("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultEndpoint),
+	)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		// A failed final flush means the Collector was unreachable, not that
+		// the service failed — log it and let the process exit cleanly.
+		if err := shutdownTelemetry(ctx); err != nil {
+			logger.Warn("telemetry shutdown did not flush cleanly", "error", err)
+		}
+	}()
+
 	clock := memory.SystemClock{}
 
 	var (
@@ -51,7 +79,7 @@ func run() error {
 	)
 
 	if databaseURL == "" {
-		logger.Println("DATABASE_URL not set; using in-memory adapters")
+		logger.Info("database url not configured; using in-memory adapters")
 		charges = memory.NewChargeRepo()
 		plans = memory.NewPlanRepo()
 		pools = memory.NewWorkPoolRepo()
@@ -84,7 +112,7 @@ func run() error {
 		if kafkaBrokers == "" {
 			return fmt.Errorf("EVENT_PUBLISHER=kafka requires KAFKA_BROKERS to be set")
 		}
-		logger.Printf("publishing events to kafka brokers=%s", kafkaBrokers)
+		logger.Info("event publisher configured", "publisher", "kafka", "brokers", kafkaBrokers)
 		kafkaPublisher := outboundkafka.NewPublisher(brokerList(kafkaBrokers), workUnits, newEventID)
 		defer func() { _ = kafkaPublisher.Close() }()
 		publisher = kafkaPublisher
@@ -106,7 +134,7 @@ func run() error {
 		InventoryView:         usecases.NewInventoryView(inventoryViews),
 	}
 
-	router := inboundhttp.NewRouter(handlers)
+	router := inboundhttp.NewRouter(handlers, otelServiceName, logger)
 
 	server := &http.Server{
 		Addr:              httpAddr,
@@ -116,7 +144,7 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Printf("listening on %s", httpAddr)
+		logger.Info("http server listening", "addr", httpAddr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
@@ -127,13 +155,13 @@ func run() error {
 	defer cancelConsumer()
 
 	if kafkaBrokers != "" {
-		logger.Printf("consuming integration events from kafka brokers=%s", kafkaBrokers)
+		logger.Info("consuming integration events", "brokers", kafkaBrokers)
 		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
 		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
 		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, processedEvts, logger)
 		go func() {
 			if err := consumer.Run(consumerCtx); err != nil {
-				logger.Printf("kafka consumer stopped: %v", err)
+				logger.Error("kafka consumer stopped", "error", err)
 			}
 		}()
 	}
@@ -145,7 +173,7 @@ func run() error {
 	case err := <-errCh:
 		return err
 	case <-sigCh:
-		logger.Println("shutting down")
+		logger.Info("shutting down")
 		cancelConsumer()
 		if consumer != nil {
 			_ = consumer.Close()
@@ -154,6 +182,27 @@ func run() error {
 		defer cancel()
 		return server.Shutdown(ctx)
 	}
+}
+
+// newLogger builds the process-wide structured logger: JSON to stdout, at
+// the level LOG_LEVEL names (debug|info|warn|error, case-insensitive,
+// default info). Records are routed through telemetry.TraceHandler so any
+// log emitted inside a span carries that span's trace_id and span_id.
+func newLogger(level string) *slog.Logger {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
+	return slog.New(telemetry.NewTraceHandler(handler))
 }
 
 func brokerList(csv string) []string {

@@ -54,7 +54,7 @@ func newServer() *httptest.Server {
 		InventoryView:         usecases.NewInventoryView(inventoryViews),
 	}
 
-	return httptest.NewServer(inboundhttp.NewRouter(h))
+	return httptest.NewServer(inboundhttp.NewRouter(h, "wes-work-planning", nil))
 }
 
 // world is the per-scenario state: one server with its own in-memory

@@ -10,8 +10,13 @@ import (
 	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/envelope"
+	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
@@ -47,16 +52,25 @@ func (p *Publisher) Close() error {
 	return p.writer.Close()
 }
 
+// Publish writes one envelope per domain event inside a single
+// "kafka.publish <topic>" producer span, injecting that span's W3C trace
+// context into every message's headers so the consuming service continues
+// the same distributed trace.
 func (p *Publisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
 
+	ctx, span := otelkafka.StartPublishSpan(ctx, envelope.TopicWorkPlanningEvents,
+		semconv.MessagingBatchMessageCount(len(events)),
+	)
+	defer span.End()
+
 	msgs := make([]kafkago.Message, 0, len(events))
 	for _, e := range events {
 		data, err := p.dataFor(ctx, e)
 		if err != nil {
-			return err
+			return recordErr(span, err)
 		}
 
 		env := envelope.Envelope{
@@ -68,12 +82,36 @@ func (p *Publisher) Publish(ctx context.Context, events ...shared.DomainEvent) e
 		}
 		body, err := json.Marshal(env)
 		if err != nil {
-			return err
+			return recordErr(span, err)
 		}
-		msgs = append(msgs, kafkago.Message{Key: []byte(env.EventId), Value: body})
+
+		msg := kafkago.Message{Key: []byte(env.EventId), Value: body}
+		otelkafka.Inject(ctx, &msg)
+		msgs = append(msgs, msg)
 	}
 
-	return p.writer.WriteMessages(ctx, msgs...)
+	span.SetAttributes(attribute.StringSlice("messaging.event_types", eventTypes(events)))
+
+	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
+		return recordErr(span, err)
+	}
+	return nil
+}
+
+// recordErr marks span failed and returns err unchanged, so instrumentation
+// never alters the error the caller sees.
+func recordErr(span trace.Span, err error) error {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	return err
+}
+
+func eventTypes(events []shared.DomainEvent) []string {
+	out := make([]string, len(events))
+	for i, e := range events {
+		out[i] = e.EventName()
+	}
+	return out
 }
 
 // dataFor builds the event-type-specific "data" payload. Only WorkReleased
