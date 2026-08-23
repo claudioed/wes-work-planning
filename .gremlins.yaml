@@ -10,9 +10,13 @@
 # Measured on 2026-08-23 with gremlins v0.6.0:
 #   ./internal/domain/release  -> 25 mutants, killed 25 / lived 0, efficacy 100.00%, 1m27s
 #   ./internal/domain          -> 51 mutants, killed 51 / lived 0, efficacy 100.00%, 2m00s
-# Thresholds are set at 95 — just below the measured 100% — so they lock in
-# today's quality and catch a regression, without going red on a single flake
-# (same philosophy as the 90% coverage gate on an already-higher number).
+# NOTE on the comparison: gremlins fails when the MEASURED value is <= the
+# threshold (verified empirically — a run measuring 100.00% against a threshold
+# of 100 exits with "ERROR: below efficacy-threshold"), so the threshold must
+# sit strictly below what we can meet today. 99 is therefore the tightest
+# useful value: it locks in today's 100% and goes red the moment a single
+# mutant survives (24/25 = 96.00% <= 99), the same "gate just under what we
+# already achieve" approach as the 90% coverage gate in ci.yml.
 
 silent: false
 
@@ -23,6 +27,6 @@ unleash:
 
   threshold:
     # efficacy = KILLED / (KILLED + LIVED)
-    efficacy: 95
+    efficacy: 99
     # mutant-coverage = (KILLED + LIVED) / TOTAL mutants
-    mutant-coverage: 95
+    mutant-coverage: 99
