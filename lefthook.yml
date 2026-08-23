@@ -11,6 +11,8 @@
 #
 # Escape hatch (use sparingly): LEFTHOOK=0 git commit ...
 
+min_version: 1.7.0
+
 pre-commit:
   parallel: false
   jobs:
