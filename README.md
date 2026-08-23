@@ -368,6 +368,91 @@ curl localhost:8080/paths/pick-a/telemetry
 # work unit wu-1 is now Completed
 ```
 
+## Observability
+
+The service is instrumented with OpenTelemetry: traces and metrics are pushed
+over **OTLP/gRPC** to a Collector, and logs are structured JSON on `log/slog`
+carrying the active span's `trace_id`/`span_id`.
+
+### Environment
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`, case-insensitive. JSON to stdout. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | Collector's OTLP/gRPC receiver. Accepts the spec URL form (`http://host:4317`) or bare `host:port`. |
+| `OTEL_SERVICE_NAME` | `wes-work-planning` | `service.name` resource attribute. |
+| `SERVICE_VERSION` | `dev` | `service.version` resource attribute. |
+| `ENVIRONMENT` | `local` | `deployment.environment.name` resource attribute. |
+
+A Collector is *expected* at `OTEL_EXPORTER_OTLP_ENDPOINT` but never
+*required*: the OTLP exporters dial lazily, so with nothing listening the
+telemetry is silently dropped and the service starts and serves normally. In
+the `warehouse-infra` kind cluster the Helm chart points this at the
+in-cluster Collector Service (`charts/wes-work-planning/values.yaml`, the
+`otel` block).
+
+### What gets exported
+
+**Traces**
+
+- One server span per HTTP request (`github.com/riandyrn/otelchi`), named
+  after the chi **route pattern** (`/paths/{pathId}/release`) rather than the
+  raw path, so span names stay low-cardinality.
+- A child span per database call (`github.com/exaring/otelpgx` as the pgx v5
+  pool tracer), carrying the normalized SQL — parameter placeholders, never
+  literal values.
+- `kafka.publish <topic>` on the producer side and `kafka.consume <topic>` on
+  the consumer side, per the OTel messaging semantic conventions. Trace
+  context crosses the broker in the message's `traceparent` header
+  (`internal/adapters/kafka/otelkafka`), so a `WorkReleased` published here
+  and consumed by `fulfillment-execution` is one distributed trace — and a
+  `ShiftPlanCommitted` published by `workforce-management` continues its
+  trace into this service's projector.
+
+**Metrics**
+
+- `http.server.request.duration` (histogram, seconds) and
+  `http.server.active_requests`, from otelchi's metric middleware.
+- `wes.work_units.released` — the business metric: a counter incremented in
+  the `ReleaseNextWork` use case (not in the HTTP handler, so it tracks the
+  real domain event), attributed by `path_id`.
+- Go runtime metrics — goroutines, GC, memory —
+  (`go.opentelemetry.io/contrib/instrumentation/runtime`).
+
+**Logs**
+
+Every record is JSON on stdout. Records emitted while a span is active carry
+that span's IDs, so logs join traces:
+
+```json
+{"time":"...","level":"INFO","msg":"http request","method":"POST","route":"/paths/{pathId}/release","status":200,"trace_id":"21da85e3a34ce1fabc425b63dfb148c6","span_id":"3af54929e6a0094c"}
+```
+
+The OTel SDK's own diagnostics are bridged onto the same logger at `debug`,
+so nothing escapes as plain text.
+
+### Smoke-testing trace propagation
+
+With the shared broker running, publish a `WorkReleased` by releasing work,
+then read the message back and compare its `traceparent` with the `trace_id`
+of the request that produced it:
+
+```sh
+KAFKA_BROKERS=localhost:9092 EVENT_PUBLISHER=kafka LOG_LEVEL=info go run ./cmd/wes
+
+curl -X POST localhost:8080/paths/pick-a/work-units \
+  -H 'Content-Type: application/json' \
+  -d '{"workUnitId":"wu-1","cpt":"2026-08-23T23:00:00Z","reference":"order-1"}'
+curl -X POST localhost:8080/paths/pick-a/release
+
+kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic warehouse.work-planning.events --property print.headers=true --from-beginning
+```
+
+The reverse direction works the same way: publish a `ShiftPlanCommitted` with
+a `traceparent` header onto `warehouse.workforce.events` and the projector's
+log line comes out carrying that same `trace_id`.
+
 ## Invariants
 
 Three aggregate invariants are enforced in the domain layer and each has a

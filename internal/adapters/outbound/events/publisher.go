@@ -5,7 +5,7 @@ package events
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
@@ -22,11 +22,14 @@ type Publisher interface {
 // can assert on what was published.
 type LogPublisher struct {
 	mu     sync.Mutex
-	logger *log.Logger
+	logger *slog.Logger
 	events []shared.DomainEvent
 }
 
-func NewLogPublisher(logger *log.Logger) *LogPublisher {
+// NewLogPublisher returns a publisher that logs each event through logger
+// and buffers it. A nil logger disables the logging half, which the tests
+// rely on.
+func NewLogPublisher(logger *slog.Logger) *LogPublisher {
 	return &LogPublisher{logger: logger}
 }
 
@@ -35,7 +38,10 @@ func (p *LogPublisher) Publish(ctx context.Context, events ...shared.DomainEvent
 	defer p.mu.Unlock()
 	for _, e := range events {
 		if p.logger != nil {
-			p.logger.Printf("event=%s occurredAt=%s", e.EventName(), e.OccurredAt())
+			p.logger.InfoContext(ctx, "domain event published",
+				"event", e.EventName(),
+				"occurred_at", e.OccurredAt(),
+			)
 		}
 		p.events = append(p.events, e)
 	}

@@ -7,11 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
+	"strconv"
 
 	kafkago "github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/envelope"
+	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
@@ -55,10 +61,10 @@ type Consumer struct {
 	observeInventory  *usecases.ObserveInventoryChange
 	recordCompletion  *usecases.RecordCompletion
 	processed         ports.ProcessedEventRepo
-	logger            *log.Logger
+	logger            *slog.Logger
 }
 
-func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, processed ports.ProcessedEventRepo, logger *log.Logger) *Consumer {
+func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, processed ports.ProcessedEventRepo, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		workforceReader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
@@ -115,23 +121,60 @@ func (c *Consumer) consumeLoop(ctx context.Context, reader *kafkago.Reader, hand
 			return err
 		}
 
-		var env envelope.Envelope
-		if err := json.Unmarshal(msg.Value, &env); err != nil {
-			c.logf("skipping unparseable message on %s: %v", reader.Config().Topic, err)
-			_ = reader.CommitMessages(ctx, msg)
-			continue
-		}
-
-		if err := handle(ctx, env); err != nil {
-			c.logf("skipping event_id=%s event_type=%s on %s: %v", env.EventId, env.EventType, reader.Config().Topic, err)
-			_ = reader.CommitMessages(ctx, msg)
-			continue
-		}
-
-		if err := reader.CommitMessages(ctx, msg); err != nil {
+		if err := c.handleMessage(ctx, reader, msg, handle); err != nil {
 			return err
 		}
 	}
+}
+
+// handleMessage processes one fetched message inside a
+// "kafka.consume <topic>" span whose parent is the producing service's
+// publish span, recovered from the message's W3C trace-context headers.
+// Unparseable or unhandleable messages are logged and committed rather than
+// redelivered forever; only a commit failure aborts the consume loop, which
+// is the error this returns.
+func (c *Consumer) handleMessage(ctx context.Context, reader *kafkago.Reader, msg kafkago.Message, handle func(context.Context, envelope.Envelope) error) error {
+	topic := reader.Config().Topic
+
+	msgCtx, span := otelkafka.StartConsumeSpan(otelkafka.Extract(ctx, &msg), topic,
+		semconv.MessagingKafkaOffset(int(msg.Offset)),
+		semconv.MessagingDestinationPartitionID(strconv.Itoa(msg.Partition)),
+	)
+	defer span.End()
+
+	var env envelope.Envelope
+	if err := json.Unmarshal(msg.Value, &env); err != nil {
+		recordSpanError(span, err)
+		c.log(msgCtx, "skipping unparseable kafka message", "topic", topic, "error", err)
+		_ = reader.CommitMessages(ctx, msg)
+		return nil
+	}
+
+	span.SetAttributes(
+		attribute.String("messaging.message.event_id", env.EventId),
+		attribute.String("messaging.message.event_type", env.EventType),
+		attribute.String("messaging.message.source", env.Source),
+	)
+
+	if err := handle(msgCtx, env); err != nil {
+		recordSpanError(span, err)
+		c.log(msgCtx, "skipping kafka event",
+			"topic", topic, "event_id", env.EventId, "event_type", env.EventType, "error", err)
+		_ = reader.CommitMessages(ctx, msg)
+		return nil
+	}
+
+	if err := reader.CommitMessages(ctx, msg); err != nil {
+		recordSpanError(span, err)
+		return err
+	}
+	return nil
+}
+
+// recordSpanError marks span as failed without changing any control flow.
+func recordSpanError(span trace.Span, err error) {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
 }
 
 func (c *Consumer) handleWorkforceEvent(ctx context.Context, env envelope.Envelope) error {
@@ -211,8 +254,11 @@ func (c *Consumer) handleFulfillmentEvent(ctx context.Context, env envelope.Enve
 	return err
 }
 
-func (c *Consumer) logf(format string, args ...any) {
+// log emits a structured record through the configured logger, carrying the
+// consume span's trace_id/span_id via ctx. A nil logger silences output, as
+// the tests rely on.
+func (c *Consumer) log(ctx context.Context, msg string, args ...any) {
 	if c.logger != nil {
-		c.logger.Printf(format, args...)
+		c.logger.WarnContext(ctx, msg, args...)
 	}
 }
