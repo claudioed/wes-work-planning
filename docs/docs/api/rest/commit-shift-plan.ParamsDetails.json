@@ -1,0 +1,1 @@
+{"parameters":[{"name":"pathId","in":"path","required":true,"description":"The process path's identifier — a named station that owns a queue (unit-in → unit-out), e.g. a pick zone or pack line.\n","schema":{"type":"string","minLength":1},"example":"pick-a"}]}

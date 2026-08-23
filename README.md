@@ -347,3 +347,15 @@ failing-path unit test:
   cannot complete before release (`internal/domain/workunit/work_unit_test.go`).
 - **WorkPool**: at-most-once handout per entry, and a release-fed pool's WIP
   limit is a hard invariant on release (`internal/domain/release/work_pool_test.go`).
+
+## Documentation
+
+Full documentation site: **<https://claudioed.github.io/wes-work-planning/>**
+
+It covers the business context and ubiquitous language, the DDD model
+(subdomain classification, every aggregate and invariant, all nine domain
+events), an API reference generated from `apis/openapi.yaml` plus an Events
+page from `apis/asyncapi.yaml`, the ecosystem context map, and seven
+architecture decision records. Source lives in [`docs/`](./docs) (Docusaurus);
+it is built and deployed to GitHub Pages by
+[`.github/workflows/docs.yml`](./.github/workflows/docs.yml).

@@ -1,0 +1,96 @@
+---
+id: index
+title: Architecture Decision Records
+sidebar_label: About ADRs
+sidebar_position: 0
+slug: /adr/
+description: Why these records exist, the template they follow, and how to propose a new one.
+---
+
+# Architecture Decision Records
+
+An **Architecture Decision Record** captures one architecturally significant
+decision: the forces that applied, the choice that was made, and what that
+choice costs. These records use
+[Michael Nygard's template](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions),
+the de facto standard: one Markdown file per decision, numbered `0001-`,
+`0002-`, …, never renumbered.
+
+## Why they exist
+
+Code shows *what* was decided. It almost never shows *what else was considered*
+or *what the decision cost* — and those are exactly the things a future reader
+needs before changing it.
+
+A record is written when the answer to "why is it like this?" would otherwise
+be lost, or when someone would reasonably assume the current design was an
+accident. Two of the records here exist precisely because the design looks
+*wrong* at first glance:
+[ADR-0006](./0006-labor-plan-view-not-shift-plan.md) (two types with the same
+name that must not be merged) and
+[ADR-0003](./0003-flow-balancing-as-domain-service.md) (a decision engine with
+no scheduler).
+
+## The records
+
+| # | Title | Status |
+|---|---|---|
+| [0001](./0001-hexagonal-ports-and-adapters.md) | Hexagonal (ports & adapters) architecture | Accepted |
+| [0002](./0002-waveless-continuous-release.md) | Waveless continuous release over wave-based batching | Accepted |
+| [0003](./0003-flow-balancing-as-domain-service.md) | Flow balancing as a domain service, not a scheduled batch job | Accepted |
+| [0004](./0004-kafka-integration-events.md) | Kafka integration events with a shared envelope and a CloudEvents type convention | Accepted |
+| [0005](./0005-rfc-7807-problem-details.md) | RFC 7807 `application/problem+json` for every error response | Accepted |
+| [0006](./0006-labor-plan-view-not-shift-plan.md) | Project Workforce's `ShiftPlanCommitted` into a separate read model, not our `ShiftPlan` aggregate | Accepted |
+| [0007](./0007-arch-go-fitness-tests.md) | Executable architecture fitness tests with arch-go | Accepted |
+
+## The template
+
+```markdown
+# ADR-NNNN — Short present-tense title
+
+## Status
+Proposed | Accepted | Deprecated | Superseded by ADR-NNNN
+
+## Context
+The forces at play: technical, business, domain. Written so a reader who was
+not in the room can see why a decision was needed at all. Facts, not
+justification.
+
+## Decision
+The choice, stated in the active voice: "We will …".
+
+## Consequences
+What becomes easier, what becomes harder, and what is now hard to reverse.
+Both the good and the bad — a record that lists only benefits is marketing,
+not a decision record.
+```
+
+## Status lifecycle
+
+| Status | Meaning |
+|---|---|
+| **Proposed** | Open for discussion; not yet acted on. |
+| **Accepted** | In force. The code reflects it. |
+| **Deprecated** | No longer applied, with no direct replacement. |
+| **Superseded by ADR-NNNN** | Replaced by a later record. |
+
+An accepted record is **never edited to reflect a change of mind** and never
+deleted. Superseding it with a new record preserves the reasoning that applied
+at the time, which is the only reason the archive is worth keeping.
+
+## Proposing a new one
+
+1. Copy the template into `docs/docs/adr/NNNN-short-title.md`, taking the next
+   free number.
+2. Set `Status: Proposed`.
+3. Add it to the table above and to the `adr/` section of
+   [`docs/sidebars.ts`](https://github.com/claudioed/wes-work-planning/blob/main/docs/sidebars.ts).
+4. Open a pull request. The discussion happens on the PR; merging with
+   `Status: Accepted` is the act of accepting it.
+
+## Scope
+
+These records cover the **Work Planning & Release** bounded context only. Each
+sibling service keeps its own. Where a decision is genuinely platform-wide —
+the integration envelope, for instance — the record states so explicitly and
+notes that the same decision is recorded in the other repositories.

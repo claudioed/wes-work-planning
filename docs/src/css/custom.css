@@ -1,0 +1,52 @@
+/**
+ * Global styles for the WES Work Planning & Release documentation site.
+ * Infima variables are overridden here; component-scoped styles live in
+ * *.module.css next to their components.
+ */
+
+:root {
+  /* A cool blue rather than the template green — this is the WES tier. */
+  --ifm-color-primary: #2e6da4;
+  --ifm-color-primary-dark: #2a6294;
+  --ifm-color-primary-darker: #285c8b;
+  --ifm-color-primary-darkest: #214c73;
+  --ifm-color-primary-light: #3278b4;
+  --ifm-color-primary-lighter: #367ebd;
+  --ifm-color-primary-lightest: #4a8fca;
+  --ifm-code-font-size: 94%;
+  --docusaurus-highlighted-code-line-bg: rgb(0 0 0 / 10%);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #6fa8dc;
+  --ifm-color-primary-dark: #5599d5;
+  --ifm-color-primary-darker: #4791d1;
+  --ifm-color-primary-darkest: #2f79ba;
+  --ifm-color-primary-light: #89b7e3;
+  --ifm-color-primary-lighter: #97bfe7;
+  --ifm-color-primary-lightest: #c1d9f0;
+  --docusaurus-highlighted-code-line-bg: rgb(255 255 255 / 10%);
+}
+
+/* Tables carry a lot of this site's content (invariant and event catalogues),
+   so give them room to breathe and keep long type URIs from overflowing. */
+.markdown table {
+  display: table;
+  width: 100%;
+}
+
+.markdown table th,
+.markdown table td {
+  vertical-align: top;
+}
+
+.markdown table code {
+  word-break: break-word;
+}
+
+/* Mermaid diagrams are wide; centre them and let them use the full column. */
+.docusaurus-mermaid-container {
+  display: flex;
+  justify-content: center;
+  margin: 1.5rem 0;
+}

@@ -1,0 +1,144 @@
+---
+id: sibling-services
+title: Sibling services
+sidebar_label: Sibling services
+sidebar_position: 3
+description: What each of the other four warehouse-systems bounded contexts owns, and how it relates to this one.
+---
+
+# Sibling services
+
+The other four bounded contexts, summarised from each repository's own
+`CLAUDE.md`. Each is an independent Go service with its own model, its own
+database and its own deployment lifecycle.
+
+---
+
+## `inventory-storage` — WMS tier, **Core**
+
+> The WMS-tier authoritative record of **what is held where, and what portion is
+> usable.**
+
+Implements Amazon-style **chaotic (random) stow**: no fixed product location, an
+item goes to any free bin and the system records the exact bin. Its defining
+design rule is the **revocable reservation** — allocation binds a quantity to
+demand with a timeout, and revoking returns the quantity to usable, so a
+physical delivery failure (blocked pod, lost tote, chute jam, short pick) never
+strands an order.
+
+| | |
+|---|---|
+| Aggregates | `StockUnit` (SKU@bin), `Bin`/`Location`, `Reservation` |
+| Key invariants | every item has exactly one known bin or is flagged `Unlocated`; a stow requires **both** item-scan and location-scan; `sum(qty) ≤ bin capacity`; `reserved ≤ usable` |
+| Publishes | `StockReserved`, `ReservationRevoked` on `warehouse.inventory.events` |
+
+**Relationship to this service:** upstream Customer/Supplier. We consume its two
+reservation events and project them into `UsableInventoryObserved`, keyed by
+SKU. That projection is read-only context: **usable, not total, is what
+constrains release**, and this is the only channel through which we learn it.
+
+---
+
+## `workforce-management` — **Supporting**
+
+> Owns "who is on shift, on which process path, at what rate; direct vs indirect
+> hours."
+
+Two horizons: shift-start headcount planning (a human commits a split across
+paths) and intra-shift assignment tracking. It **stops at the path boundary** —
+it never links an associate to a specific task, because task dispatch and
+workforce planning change at completely different cadences (shifts versus
+seconds).
+
+| | |
+|---|---|
+| Aggregates | `AssociateShift`, `ShiftPlan`, `LaborAssignment` |
+| Key invariants | exactly one **active** assignment per associate at a time; an assignment must satisfy the path's certification requirement |
+| Publishes | `ShiftPlanCommitted` — **one message per path line** — on `warehouse.workforce.events` |
+
+**Relationship to this service:** upstream Customer/Supplier. Its `ShiftPlan`
+and ours share a name and nothing else: theirs is a labour-side commitment
+across a building's paths; ours is this context's own rate × heads × hours
+decision with the `plannedHeads ≤ installedStations` invariant. We project
+theirs into `LaborPlanObserved` and never near our aggregate —
+[ADR-0006](../adr/0006-labor-plan-view-not-shift-plan.md).
+
+Note the pleasing symmetry with our `RebalanceDecision`: Workforce surfaces
+`PathUnderstaffed` as *a flag, not a decision*; we surface `ReassignLabor` the
+same way. Neither context moves a person — that is a human call, recorded in
+Workforce.
+
+---
+
+## `fulfillment-execution` — **Core**
+
+> Turns released work into completed physical operations: the **task lifecycle**
+> for Pick, Pack and SLAM.
+
+Its defining rule is **pull, not push**: a station calls
+`claimNext(stationId, capabilities)` and the system selects work, not workers.
+Claims carry a **lease**, so an unconfirmed task returns to the pool rather than
+vanishing.
+
+| | |
+|---|---|
+| Aggregates | `Task` (Pick/Pack/SLAM, leased), `Station`, `Package` |
+| Key invariants | at most one active claim; no double-complete; a claim requires matching capabilities; an expired lease frees the task; SLAM diverts when weight is out of tolerance |
+| Consumes | our `WorkReleased` on `warehouse.work-planning.events` |
+| Publishes | `TaskCompleted` on `warehouse.fulfillment.events` |
+
+**Relationship to this service:** the only *bidirectional* pair in the platform —
+two directed Customer/Supplier relationships. We supply released work; it
+supplies completion back, which drops our WIP and lets the next release proceed.
+
+The model correspondence is worth being precise about. Our `WorkUnit` and its
+`Task` are **different models of the same reality**, and both independently
+enforce at-most-once and no-double-complete on their own side of the boundary.
+Both also carry a CPT and derive priority from it — the drum is visible in both
+contexts, which is what makes the handoff coherent without a shared type.
+
+---
+
+## `facility-layout` — **Generic**
+
+> The system of record for **where things physically are in the building**: the
+> site's structural hierarchy and the coded storage slots inside it.
+
+Owns whether a coded location *exists, is active, and is legal for a given kind
+of storage unit* — the warehouse map other contexts read but never write. It
+explicitly does **not** own occupancy or stock; that stays in
+`inventory-storage`.
+
+| | |
+|---|---|
+| Model | `Site → Zone → Aisle → LocationSlot`, plus `PlacementRules` |
+| Location code | industry-standard `Site-Area-Zone-Aisle-Bay-Level-Position` |
+| Read endpoints | `GET /sites/{siteCode}/layout`, `GET /zones/{zoneId}/grid` |
+| Publishes | **nothing to Kafka today** — in-process log publisher only |
+
+**Relationship to this service: none today.** No topic, no API call, no
+dependency in either direction. Classified Generic for the same reason the
+reference model puts Cartonization there: extract it once rather than
+duplicating geography in every context.
+
+If release ever becomes travel-aware, or flow balancing congestion-aware, this
+context would become a **Conformist** to facility-layout's location-code
+Published Language rather than modelling physical structure itself.
+
+---
+
+## What all five share
+
+Conventions, not code. Each service re-implements these; none of them is a
+shared library, so no service can force another to redeploy:
+
+- Hexagonal / ports-and-adapters with the same strict dependency rule
+- Go, chi, pgx/v5, golang-migrate, `segmentio/kafka-go`
+- The same integration-event envelope shape, duplicated by agreement
+- The same `EVENT_PUBLISHER=kafka|log` / `KAFKA_BROKERS` configuration switches
+- RFC 7807 problem details, an `apis/openapi.yaml` linted by Spectral in CI,
+  and a Helm chart
+
+That last point is the real payoff of five bounded contexts that agree on
+conventions while sharing no types: the *shape* is familiar everywhere, and the
+*models* stay independent.

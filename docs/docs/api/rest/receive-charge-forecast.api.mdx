@@ -1,0 +1,70 @@
+---
+id: receive-charge-forecast
+title: "Receive a charge forecast for a process path"
+description: "Records the volume due by CPT for a process path — the ReceiveChargeForecast use case. Replaces any existing forecast for the path with the new set of CPT buckets (each bucket is an exact CPT timestamp and the quantity due at that CPT). Publishes `ChargeForecastReceived`. This is the input side of the 'charge → plan → release' pipeline: a plan is later committed against this charge, and work units enqueued against it are released against a `WorkPool` in CPT priority order."
+sidebar_label: "Receive a charge forecast for a process path"
+hide_title: true
+hide_table_of_contents: true
+api: eJztWm1vI7cR/iuD/dBI7urF7iVx1PaD43Mat3c91dbBQO8MiCJHEmsuuUdyJauGgX7qDygK9Af1n+SXtDPc1audpGnRAs0dYJyk5XLn5ZlnhjP7kLkSvYja2UuVDTKPEvUCz+fCz/Ar51GKELM8Uxik1yWtywbZFUrnVYA4R1g4UxUIqkKYrOB8OIKp8yCg9E5iCFCKOIdv/vRXXnz11PZQBQQpAnbhCksjJAYQdgV4r0PUdkYbpoW0M23Dey51nPM3i0sIGMFN+fGTSt5hDNBCIef1N9C0JeC9kJEXRV1giKIoQVjFu3yohI06rlgTESHOBS9td2FYTYwOcwww3pW8VkeNuzCa60BPoa20LasIQSskmeiX95nkG+GbP/8FSiMsf/BoUAR8n0GpSzTa4oAMR5d1ACMiepCuKHSMqEDMhLaBBNMB0nY5S790/g4qq2MAtB8qrLYW6wjCY/Okze8CxjfO3w2dM2PQlm1Seu08WcB5hb773mZ5FsUsZIN3WdIb1oi4zbNSeFFgRE8LHjIrCswGGbnmUmV5pm39Lcszjx8q7VFlg+gr3EfTiDy6hZZPAmiFNuqpRs/QEUC7KwiRkZp845Y2gABWGFqkf0cnu/JnV8V2DtiddcmmWt7BH51FcB5KIe+ArJ1UDHKOhcgGD1lclaRCiF7bWZZnhbav0M7iPBscP+YZ3ouiNKyklncdkT3eJtUwxC+dWtEW+5pKZyPaSJdEWRotWYHeHwJp/nD4bDf5A0oKuNJTYEaNga7WmN5aKLwXqyTjZcQiZIPjfbueRSCvRyC9z4ej3hrim6Bo5O2Sx9I+h7LsbbsdR61zr6OWwsCwMgZGusD2syGlY/dAM1nGp0w/db4QMRtkSkTsULQeyEGwMaRe4Qq0BOlSeImG4MwxUmsp/xltE4RCWD3FwJFkCUraGCjEHQIFTvSVvCPpNk4+6Z981umfdk6OR8cng35/0O//PnvMs0arLbG1jThDvy23tvFnJ8k/uqiKbNDfl/8tR2zNmyzw+XC0I8KLk37/8XE7fN6xvbZkuM2zqCPLez4cfckaZ4/7NzXw2Vr9JBNfJTBn22DfAt+72l1Pm2bbMix5/tTy06eWH5/2+4+3j7XcoXQ2JHSc9I/pv13D1Vy0zgqesxGqLoxfuRRg4w2DJEqWHgW5vrnpk0C4cJah6zG4yss6r7TYFwH9QkuEuQhgHShUFLuo4FcXTYYLUVglDEWX3BMpOiVW66wXXRQGwtwtA1Ql4XNMu/TocaH3kCjzsRfRYIHRr8bgrMTE63qb1K06ZHId24nH5igUk/FD1pjhSYqpY+xxH4/na3u8vbpsEldjtz0FdyOlViSxYi8tzciX/yH2q3PKEzRxSMl5xtb+3b8UpLuGuK4KUl8Y01BIjVSNYUfxz/qE8m8h54+M+n/DqHlTGquzH2remznWdlzzxFKENX1BiziHSj7j5F37WdP11xS6r8m69toNgQ1Cd5TYVnQvCyQG3ksDTRQ2oXYQaRQO+X8tW+w65DkDkYle9PuHSeS1MOQyVFBXcDBxagUtbRfCaAW/vn7z23YOAgodAh1CGkPDVKNRORWSVKfXy/lHWAhDtSgXnRZnIurFJmZzwKKMq5RktKpZ+xmKLL2bGCx++t1UuXcy++ocPj/tfw6teYxlGPR6y+Wy66eyg0pH57vOz3p+KumP1rVhmJ4ELzEKbRib8PVoNISz4WXowsUC/QrQe+ehSc1rPmiSZBU4zdIvc1FiOpqdJ806o1WJ8JxuyQi7BJY0/JYQq7w+5FDOWnXWX5HDiC+T3JS4Z86voKUcUjqPYBEVRMep3ywoRYMAj8JAKWbY7sJ1FBODUKIHxcdQGfd327NCUmUTso0D+K7QXWLoUEbv0PnOajvrLoXHuasCdsIqUKboKlz0eA2fYITxKNSqIx3tGFFxdkshe2idXXN8pe9R5WtZOwYXaGBeFcJ2aFdWLlRFIfxql2lumtMk1M+HnefTEawKPyStvqwSBOqKjDGWdgPpFEJrjd061CgH7dLgi/4XXLYQUr/bBpTOQolST7WsfVdgCCLVMcl3TsrKe7QSd62wPlNz5+ApQ1DxJaz8Hr4gORqS4eDn42vpnaokqg1Oc3D1UV9z8eWRHm4dWBErv1+n7pVga9iE3rLqvDg9+eK432sEPsgULHADprVT16bdSg01PezlglrhHwjxmjQ7HzYZqnncZc2nW5caxL3o9ze+X6cDKCribgTrbKfh3GzbPc+Vp2STT59KDWcWKov3JUryRUrKHe7mTIU2lW8YngijdIFolXomgAuiu7JuFvnkVAbwR5L/SPIfSf4jyf+4SD6it8J0+L4dik8XamaF5noDuk93eJ5JFUJ0HqGyYiG0IVh/T4Z/zLMC49zxscXxJINb0utb1s2X+qY8S1Kl80vlTW2AQa9nnBRm7kIcnPZP+wcAoJ6LAUUh6Eo+Pre07RRY1Nlh6EKceRptKFFS1zyHgAhXF2cvX1+0uZccUFaejzjvbvOMmPNq012++PcbcreM6Klj59beuLm45j4VM8Kwdin8BK5SnynLM7JGUvG42+8eKk7Il+SeiassnWM5293zPEbATQMOuLhHWXH7/pphAq2bi+t2Fy4jxMpzLz/M9ZRac0dHyR1HR9DanS/xTIfaJCTzYack50B7sofx/ZsWbdCWU8XREWGchPAiIvz9b0A9tsD5Yntg0c6btlxITTuygLaVq4LhDLI7WYHWUizQ0N2kBXUXdZAeIwJdgImIco6hnaY7JXri3ABT45YwEUZYSS5y0ykYOl9OqukUPay7h1DxefWlr4rOl3ytc+XW+Xo4ApG4WfmqYOvXU6v3VKaoSkbn32cDUDRfiR4FN8NuXl9DE/BUv6GlqieHqtxac34NRD8J/WQD70z3vX1vz2YzT6UZBpraoFr3Z+qsOtgfrI33/b4Z7LVzGF8TTgis4954KOKcP0JrMyvb9Rd9cJUPEEqj44H7ckA7dZ6tOmYlUX3NN/7il8AsYwyq6zR7CmMSYDM7a/E8svFvGkZR4qGu8MEItEZJZ4oKSudMqJ+MIGAuvIKbyyEYXeiYs7u3FjprViCM8EWNC5aBOl5jaIl6Z074nNDcNCGRnS5ip3AhdrirLELQM5tiwypGn6smBtcVSJtdNtou/biiOjqyLh4dkQcP3Qytm/Prdg5raFAeQ79gm3GzhMRJulKZqypD5iajkLSk3JGbMPeGIzIcFb5k7tSIdgFhoQX8RkzvBHA1kobWqegO0Bq/EhPnCQhv0jZqnMP4LZvkshFqfYkmg/elC9z+EarDAsS5d9VsnpB5Nrzk4BAmOFhXlJpMxHp/fTa6eHN2/fO0muoHuNLEWio4C68pmRMgXnFJdkLbQWud2q2rbMiJNT3KCAv0k62vW/VSaLMHXRVhviqR+lVaNDYPmw6SkHy4qGewxOnP8/kmqVFWn+k4ryZd6YqeNKJS2qHqHeR4ri0ogRbCbj2oHiKBOBiAHL4DsJ83Hjanoo/vE/x43idINSXVB73SCG2p5mREPtSVWWpjU506WPez6+LsNs+o/qI1Dw8TEfCtN4+P9POHCn1dNi2E11whUnWkNBOAygZTYcL+mwfbEGxd1ZVzG/7H7yM8aaJmsGSpI8Jt5myQZXl2h6vNSxdc4KUxIGufLm4f0bduPhjIUQc+3XEmJfJQ5Pm1t1uF9fDN9YiGDPUrEIVTdI8XS5o3iGUS1LHN+UzJvz1kRthZJWa0Nu1J//4BTfa+ZQ==
+sidebar_class_name: "post api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Receive a charge forecast for a process path"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/paths/{pathId}/charge"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Records the volume due by CPT for a process path — the ReceiveChargeForecast use case. Replaces any existing forecast for the path with the new set of CPT buckets (each bucket is an exact CPT timestamp and the quantity due at that CPT). Publishes `ChargeForecastReceived`. This is the input side of the "charge → plan → release" pipeline: a plan is later committed against this charge, and work units enqueued against it are released against a `WorkPool` in CPT priority order.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./receive-charge-forecast.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./receive-charge-forecast.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./receive-charge-forecast.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

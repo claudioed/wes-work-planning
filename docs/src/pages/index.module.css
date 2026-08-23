@@ -1,0 +1,103 @@
+/**
+ * CSS files with the .module.css suffix will be treated as CSS modules
+ * and scoped locally.
+ */
+
+.heroBanner {
+  padding: 4.5rem 0 4rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2.5rem 1rem;
+  }
+}
+
+.heroKicker {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.78;
+  margin-bottom: 0.75rem;
+}
+
+.heroSubtitle {
+  max-width: 52rem;
+  margin: 0 auto 2rem;
+  font-size: 1.2rem;
+  line-height: 1.6;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.sectionTitle {
+  text-align: center;
+  margin-bottom: 0.75rem;
+}
+
+.sectionLead {
+  text-align: center;
+  max-width: 46rem;
+  margin: 0 auto 2rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.loop {
+  padding: 3rem 0;
+  background: var(--ifm-color-emphasis-100);
+}
+
+.loopList {
+  max-width: 46rem;
+  margin: 0 auto;
+  line-height: 1.9;
+}
+
+.wiring {
+  padding: 3rem 0 4rem;
+}
+
+.wireCard {
+  height: 100%;
+  padding: 1.25rem;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: 10px;
+  text-align: center;
+}
+
+.wireCard code {
+  display: block;
+  margin: 0.4rem 0 0.6rem;
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.wireCard p {
+  margin-bottom: 0;
+  font-size: 0.88rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+.wireDir {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ifm-color-primary);
+}
+
+.wiringFoot {
+  text-align: center;
+  margin-top: 2rem;
+  color: var(--ifm-color-emphasis-700);
+}

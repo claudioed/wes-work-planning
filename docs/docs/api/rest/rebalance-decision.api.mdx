@@ -1,0 +1,70 @@
+---
+id: rebalance-decision
+title: "Get the flow-balancing recommendation for a process path"
+description: "Inspects a process path's live buffer telemetry (backlog vs. plan) and recommends `ThrottleUpstream` (a flow-fed path over its alarm threshold — slow admission upstream, Drum-Buffer-Rope with CPT as the drum), `ReassignLabor` (a release-fed path saturated at its WIP limit with backlog remaining — flag for headcount reassignment), or `NoActionNeeded` — the RebalanceDecision use case. Side effect: publishes `PathThrottled` or `LaborReassignmentFlagged` when a non-default action is recommended (same read-only-GET-with-telemetry-side-effect pattern as `/telemetry`). When a labor plan has been observed for this path (see Labor Plan View), the response additionally includes it as extra context under `laborPlan` — this is additive and does not change the throttle/reassign decision logic itself."
+sidebar_label: "Get the flow-balancing recommendation for a process path"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get the flow-balancing recommendation for a process path"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/paths/{pathId}/rebalance"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Inspects a process path's live buffer telemetry (backlog vs. plan) and recommends `ThrottleUpstream` (a flow-fed path over its alarm threshold — slow admission upstream, Drum-Buffer-Rope with CPT as the drum), `ReassignLabor` (a release-fed path saturated at its WIP limit with backlog remaining — flag for headcount reassignment), or `NoActionNeeded` — the RebalanceDecision use case. Side effect: publishes `PathThrottled` or `LaborReassignmentFlagged` when a non-default action is recommended (same read-only-GET-with-telemetry-side-effect pattern as `/telemetry`). When a labor plan has been observed for this path (see Labor Plan View), the response additionally includes it as extra context under `laborPlan` — this is additive and does not change the throttle/reassign decision logic itself.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./rebalance-decision.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./rebalance-decision.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./rebalance-decision.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

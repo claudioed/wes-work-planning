@@ -1,0 +1,70 @@
+---
+id: sample-backlog
+title: "Sample live backlog telemetry for a process path"
+description: "Returns the current backlog depth/WIP read model for a process path's work pool — the SampleBacklog use case. This is a projection built from live `WorkPool` state, not persisted aggregate state. Side effect: if the pool is over its alarm threshold, publishes `BacklogThresholdBreached` (an existing, documented telemetry side effect of sampling — it does not mutate the `WorkPool` or `WorkUnit` aggregates themselves, so this remains a safe GET)."
+sidebar_label: "Sample live backlog telemetry for a process path"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Sample live backlog telemetry for a process path"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/paths/{pathId}/telemetry"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns the current backlog depth/WIP read model for a process path's work pool — the SampleBacklog use case. This is a projection built from live `WorkPool` state, not persisted aggregate state. Side effect: if the pool is over its alarm threshold, publishes `BacklogThresholdBreached` (an existing, documented telemetry side effect of sampling — it does not mutate the `WorkPool` or `WorkUnit` aggregates themselves, so this remains a safe GET).
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./sample-backlog.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./sample-backlog.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./sample-backlog.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

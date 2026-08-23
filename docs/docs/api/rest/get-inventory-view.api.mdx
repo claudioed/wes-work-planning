@@ -1,0 +1,70 @@
+---
+id: get-inventory-view
+title: "Get the latest observed usable inventory for a SKU"
+description: "Returns the `UsableInventoryObserved` read model — the latest usable-quantity projection for a SKU, built from Inventory's `StockReserved` (decrements) and `ReservationRevoked` (increments) integration events, projected via the Kafka consumer (Task 7). Keyed by SKU, not by process path — Inventory reservations are SKU-scoped, with no natural path mapping. `404` until at least one event has been observed for the SKU."
+sidebar_label: "Get the latest observed usable inventory for a SKU"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get the latest observed usable inventory for a SKU"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/inventory-view/{sku}"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns the `UsableInventoryObserved` read model — the latest usable-quantity projection for a SKU, built from Inventory's `StockReserved` (decrements) and `ReservationRevoked` (increments) integration events, projected via the Kafka consumer (Task 7). Keyed by SKU, not by process path — Inventory reservations are SKU-scoped, with no natural path mapping. `404` until at least one event has been observed for the SKU.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-inventory-view.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-inventory-view.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-inventory-view.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

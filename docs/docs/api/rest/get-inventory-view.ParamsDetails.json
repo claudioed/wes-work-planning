@@ -1,0 +1,1 @@
+{"parameters":[{"name":"sku","in":"path","required":true,"description":"The stock-keeping unit identifier this inventory view is projected for.","schema":{"type":"string","minLength":1},"example":"sku-88213"}]}

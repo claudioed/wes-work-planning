@@ -1,0 +1,70 @@
+---
+id: enqueue-work-unit
+title: "Enqueue a work unit onto a process path's work pool"
+description: "Adds a releasable unit of work (e.g. a pick task) to a process path's `WorkPool` — the EnqueueWorkUnit use case. `workUnitId` is client-supplied and must be unique within the pool: enqueueing the same `workUnitId` twice returns `409 Conflict` (`work-unit-already-enqueued`) rather than silently creating a duplicate entry — this endpoint is idempotent-by-client-supplied-ID in that sense, though not a pure no-op retry (a second call with the same ID is rejected, not silently accepted). If this is the first unit ever enqueued against the path, a `WorkPool` is auto-provisioned as release-fed with a default WIP limit. Publishes `WorkUnitCreated`."
+sidebar_label: "Enqueue a work unit onto a process path's work pool"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "post api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Enqueue a work unit onto a process path's work pool"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/paths/{pathId}/work-units"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Adds a releasable unit of work (e.g. a pick task) to a process path's `WorkPool` — the EnqueueWorkUnit use case. `workUnitId` is client-supplied and must be unique within the pool: enqueueing the same `workUnitId` twice returns `409 Conflict` (`work-unit-already-enqueued`) rather than silently creating a duplicate entry — this endpoint is idempotent-by-client-supplied-ID in that sense, though not a pure no-op retry (a second call with the same ID is rejected, not silently accepted). If this is the first unit ever enqueued against the path, a `WorkPool` is auto-provisioned as release-fed with a default WIP limit. Publishes `WorkUnitCreated`.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./enqueue-work-unit.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./enqueue-work-unit.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./enqueue-work-unit.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

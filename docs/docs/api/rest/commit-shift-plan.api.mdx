@@ -1,0 +1,70 @@
+---
+id: commit-shift-plan
+title: "Commit this service's shift plan for a process path"
+description: "Commits the rate × heads × hours split for a process path — the CommitShiftPlan use case. Enforces the `PathPlan` aggregate invariant `plannedHeads <= installedStations`; violating it fails the whole commit (no partial commit). This is THIS service's own `ShiftPlan` aggregate, distinct from the labor plan Workforce Management reports (see `GET /paths/{pathId}/labor-plan-view`) even though both are called 'ShiftPlan' — classic same-term-different-bounded-context. Publishes `ShiftPlanCommitted`."
+sidebar_label: "Commit this service's shift plan for a process path"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "post api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Commit this service's shift plan for a process path"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"post"}
+  path={"/paths/{pathId}/plan"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Commits the rate × heads × hours split for a process path — the CommitShiftPlan use case. Enforces the `PathPlan` aggregate invariant `plannedHeads <= installedStations`; violating it fails the whole commit (no partial commit). This is THIS service's own `ShiftPlan` aggregate, distinct from the labor plan Workforce Management reports (see `GET /paths/{pathId}/labor-plan-view`) even though both are called "ShiftPlan" — classic same-term-different-bounded-context. Publishes `ShiftPlanCommitted`.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./commit-shift-plan.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./commit-shift-plan.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./commit-shift-plan.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

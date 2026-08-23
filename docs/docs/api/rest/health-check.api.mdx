@@ -1,0 +1,60 @@
+---
+id: health-check
+title: "Health check"
+description: "Liveness probe for the service. Always returns 200 with a static status body if the process is up — does not check downstream dependencies (Postgres, Kafka)."
+sidebar_label: "Health check"
+hide_title: true
+hide_table_of_contents: true
+api: eJzVVt1uWzcMfhVCF5ttHMdZrwZvu8jSbA3WokGdIhdNAMsS7aNGRzwVKadeYGAPMWAPtDfZkwzUcdq0wR5gV+dHokh+H/lR94Z6zFYCpXNv5qZFG6U9bdHdmsZ4ZJdDr6tmbl6GLSZkhj7TCmFNGaRFYMzb4PAITuKd3TFklJITw7PjY7gL0oIFFivB1UdhWJHfQVhX4z6T0yMDQ+nhnz/+BE/IkEjAaRDg6S6xZLQdeOwxeUwuIMPoglg2GbmB3+z61o6PrpNpjNgNm/k786LmYW4ak5F7Soxs5vfm2fGxPr7MazEkMMRwZBrjKAkm0Z2272NwFZ/Ze9bt94Zdi53VN9n1aOaGVu/RiWlMnxVNCYOzId1H+1hySBvTGPxouz5W01uz32uQH0rI6DX0g9nN/tG+z4cNFns16lBaUtI2WJ1bac3czAYKfzeNUWYwKx73puSo9Ir089kskrOxJZb598ffHz8lWpfB4xYj9R0mgVFI0w47yjugDA/Qg/W2F8zcACPCm7OT56/OxmZ/o65dyUF2Zv7upjEhraniEKRmfXW2qFxfUb6Fi2hTCmkD38AbjGgZTWM07iGY746Oj56GeNkiOMoIKyrJo4fK2UcBWoOFK5uxpcIIZx/RFbWBxY4FOxhdnS3GR3AuMFSpBW7DWr5lmExca/MGJxMYbSmWDsEXhNUO0LoWTi8ua8ynOUhQfC5KjHAZOmxqJUfLAh1VuCz0NjuM4GyCFUJnU1gjC3qwyQNLiBE6e4sQhEFycbdjCEkILEwmfbRJg8hWEP7+C1q0nqHH/KlblOpxA3mAi+FOcVQEQipUOO4gJOhzIKUAKHvMMLqzW4xqrVkkAh/YZRQEXYCVFdcij5saYY95TbljWEe6g5WNNjmliNZriEG3l/UaMwhG7FDyDgrr+vNcuunPdW36hnocBEChs1xR8rl0Ff0wfF9rs/nihPK1mT/udlrD1asF9IfqmIW0xSSUdw2U/tGe0wVo8wx1qhhkikfX6TqdbDYZN1aQge4SemVS2sAPgjWH5Wkl/BfK6CzL8mveNe5Vcbco4waWC60TLdblbHlhpa2vMHLUdUGU2i/50hcqmYH7GOQJfQ1gWlOuqC5rkuhfVMMff4KQWGyM6BdSpYeXGoB2ywVRXMJokM4Dvx8KlkGOKeEXTirVhyqZrtFDTxT54BnBQmuzh6vzC4ihC9JUuh9tpBR3YKPN3aEuagxvU1Cs7OFku4oIJYXae7USB9WXaUcsU0rqiTls0tAbydfqo7KKOHWkAic4rpRdPqJnGASTSSKZTJTBpzTD6Op0MW7gU2lARrWumDWqVBrOkKuKti9R4VZQNFpNbkKrqpI8UeBUxhVuzURaYoRtsMN80fbEzTApAdUfw2j50q4oayG8Ho7xywaWbysk5w9BfVoaN4Afe2ItFbR+WgOQNlPZtENlnlyc1+awkenzIAwKUc37xcnl2euTxQ/D7qDq9SaoanmmBK+sVM2Fl6rc8EyPg1FGpqIIJCqJG1XNjE5gi3n16PMwmx155HFlkIpAu+sxd+iDfcCchzmrX9bVEZls96Dp/63nn8cPz2ezTZC2rI4cdTMXbfGB0M/ukKfK1/Sh5etk7Imls+mRo2G0D9eDr+fC/efZ/f+4rgwXA51csz7akMz+gNX9YZ6/Mw/z/KYxOrL11/39yjK+zXG/198fCubDpN3aHLT69GvfqK3HXC8At7gzc3PiHPZ6W9jaWNT1kwuOTu9PN4tfzy7Nfv8vtIKbBw==
+sidebar_class_name: "get api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Health check"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/healthz"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Liveness probe for the service. Always returns 200 with a static status body if the process is up — does not check downstream dependencies (Postgres, Kafka).
+
+
+<ParamsDetails>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./health-check.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./health-check.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

@@ -1,0 +1,70 @@
+---
+id: get-labor-plan-view
+title: "Get the latest labor plan Workforce Management reported for a path"
+description: "Returns the `LaborPlanObserved` read model — the latest `planned_heads`/`planned_rate`/`planned_hours` Workforce Management published on its `ShiftPlanCommitted` integration event for this path, projected via the Kafka consumer (Task 7). This is a read-only projection from a DIFFERENT bounded context's `ShiftPlan` concept — it is never fed into this service's own `PathPlan`/`ShiftPlan` aggregate or `CommitShiftPlan` use case. `404` until at least one `ShiftPlanCommitted` event has been observed for the path."
+sidebar_label: "Get the latest labor plan Workforce Management reported for a path"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Get the latest labor plan Workforce Management reported for a path"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/paths/{pathId}/labor-plan-view"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns the `LaborPlanObserved` read model — the latest `planned_heads`/`planned_rate`/`planned_hours` Workforce Management published on its `ShiftPlanCommitted` integration event for this path, projected via the Kafka consumer (Task 7). This is a read-only projection from a DIFFERENT bounded context's `ShiftPlan` concept — it is never fed into this service's own `PathPlan`/`ShiftPlan` aggregate or `CommitShiftPlan` use case. `404` until at least one `ShiftPlanCommitted` event has been observed for the path.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-labor-plan-view.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-labor-plan-view.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-labor-plan-view.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

@@ -1,0 +1,58 @@
+---
+id: wes-work-planning-release
+title: "WES — Work Planning & Release"
+description: "The core bounded context of a Warehouse Execution System (WES). It turns a shift's **charge** (volume due by each CPT — Critical Pull Time, the last moment a parcel can be manifested and still make its truck) into a **plan** (rate × heads per process path), releases work continuously in priority order (waveless — no discrete wave batches), and performs flow balancing off live buffer telemetry using Drum-Buffer-Rope with CPT as the drum. It is the 'conductor': downstream of WMS planning/inventory, upstream of WCS equipment control."
+sidebar_label: Introduction
+sidebar_position: 0
+hide_title: true
+custom_edit_url: null
+---
+
+import ApiLogo from "@theme/ApiLogo";
+import Heading from "@theme/Heading";
+import SchemaTabs from "@theme/SchemaTabs";
+import TabItem from "@theme/TabItem";
+import Export from "@theme/ApiExplorer/Export";
+
+<span
+  className={"theme-doc-version-badge badge badge--secondary"}
+  children={"Version: 1.0.0"}
+>
+</span>
+
+<Export
+  url={"https://raw.githubusercontent.com/claudioed/wes-work-planning/main/apis/openapi.yaml"}
+>
+  
+</Export>
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"WES — Work Planning & Release"}
+>
+</Heading>
+
+
+
+The core bounded context of a Warehouse Execution System (WES). It turns a shift's **charge** (volume due by each CPT — Critical Pull Time, the last moment a parcel can be manifested and still make its truck) into a **plan** (rate × heads per process path), releases work continuously in priority order (waveless — no discrete wave batches), and performs flow balancing off live buffer telemetry using Drum-Buffer-Rope with CPT as the drum. It is the "conductor": downstream of WMS planning/inventory, upstream of WCS equipment control.
+
+Aggregates owned by this service: `ChargeForecast` (volume due by CPT bucket), `ShiftPlan`/`PathPlan` (committed rate × heads × hours split per process path, enforcing `plannedHeads <= installedStations`), `WorkPool` (the priority queue for one process path — release-fed pools enforce a hard WIP limit, flow-fed pools only alarm), and `WorkUnit` (a releasable unit of work with at-most-once assignment and no double-complete).
+
+This service does **not** own equipment control (WCS), inventory reservation, or workforce scheduling — it only *observes* projections of those via Kafka integration events (`LaborPlanObserved`, `UsableInventoryObserved`), exposed read-only through this API. It also does not implement HATEOAS; this is a Richardson Maturity Level 2 API (resource nouns, correct verbs, correct status codes) without hypermedia controls.
+
+
+<div
+  style={{"display":"flex","flexDirection":"column","marginBottom":"var(--ifm-paragraph-margin-bottom)"}}
+>
+  <h3
+    style={{"marginBottom":"0.25rem"}}
+  >
+    Contact
+  </h3><span>
+    WES Work Planning & Release: 
+  </span><span>
+    URL: [https://github.com/claudioed/wes-work-planning](https://github.com/claudioed/wes-work-planning)
+  </span>
+</div>
+      
