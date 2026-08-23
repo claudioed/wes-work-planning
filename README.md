@@ -1,5 +1,12 @@
 # WES — Work Planning & Release
 
+> **⚠️ Study project.** This repository is an educational exercise in
+> Domain-Driven Design applied to warehouse management/execution systems. It
+> follows real industry-standard patterns and terminology (WMS/WES/WCS,
+> waveless release, CloudEvents, RFC 7807, hexagonal architecture) but is
+> **not a production system** and is **not affiliated with, endorsed by, or
+> representative of Amazon or any other company**.
+
 The core bounded context of a Warehouse Execution System. It turns a shift's
 **charge** (volume due by each CPT) into a **plan** (rate x heads per process
 path), releases work continuously in priority order (waveless), and performs
