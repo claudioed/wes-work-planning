@@ -201,6 +201,31 @@ has been observed yet.
 curl localhost:8080/healthz
 ```
 
+## Local development / quality gate
+
+A `Makefile` mirrors the CI sensors so they can be run locally, before pushing.
+`make help` lists every target.
+
+```sh
+make check        # fast pre-commit loop: fmt-check, vet, build, lint, test -race
+make check-all    # check + 90% coverage gate + arch-test + bdd (pre-push gate)
+make vuln         # govulncheck ./... — known CVEs in deps and the Go stdlib
+make mutation     # fast blocking mutation subset CI enforces (./internal/domain/release)
+```
+
+`make integration` and `make mutation-all` are excluded from both bundles: the
+first needs a running Postgres (`DATABASE_URL`), the second is the slow,
+exhaustive mutation run that CI keeps on a weekly schedule.
+
+Git hooks are managed with [lefthook](https://github.com/evilmartians/lefthook)
+via `lefthook.yml` — `pre-commit` runs `make fmt-check`, `make vet` and
+`make lint`; `pre-push` runs `make check`. Activate them once per clone:
+
+```sh
+brew install lefthook          # or: go install github.com/evilmartians/lefthook@latest
+lefthook install
+```
+
 ## Testing
 
 ```sh

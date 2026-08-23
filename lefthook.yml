@@ -1,0 +1,56 @@
+# lefthook (github.com/evilmartians/lefthook) — git hook configuration.
+#
+# One-time activation on a fresh clone:
+#   brew install lefthook        # or: go install github.com/evilmartians/lefthook@latest
+#   lefthook install
+#
+# This shifts the CI sensors left: the fast structural checks run before a
+# commit is created, and the full fast bundle (`make check`) runs before code
+# leaves the machine. Neither hook needs a database, and neither runs the slow
+# mutation or integration suites.
+#
+# Escape hatch (use sparingly): LEFTHOOK=0 git commit ...
+
+pre-commit:
+  parallel: false
+  jobs:
+    - name: toolchain
+      run: |
+        missing=0
+        for tool in go make; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "lefthook pre-commit: '$tool' is not on PATH — cannot run the local quality gate."
+            missing=1
+          fi
+        done
+        [ "$missing" -eq 0 ] || { echo "install the missing tool(s) and retry, or bypass once with LEFTHOOK=0 git commit"; exit 1; }
+
+    - name: fmt-check
+      run: make fmt-check
+
+    - name: vet
+      run: make vet
+
+    # `make lint` prints the exact pinned install command and exits non-zero if
+    # golangci-lint is missing — it never passes silently.
+    - name: lint
+      run: make lint
+
+pre-push:
+  parallel: false
+  jobs:
+    - name: toolchain
+      run: |
+        missing=0
+        for tool in go make; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "lefthook pre-push: '$tool' is not on PATH — cannot run the local quality gate."
+            missing=1
+          fi
+        done
+        [ "$missing" -eq 0 ] || { echo "install the missing tool(s) and retry, or bypass once with LEFTHOOK=0 git push"; exit 1; }
+
+    # fmt-check + vet + build + lint + test -race. The last gate before code
+    # leaves the machine.
+    - name: check
+      run: make check

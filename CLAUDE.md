@@ -104,6 +104,25 @@ JSON DTOs live in the http adapter; never leak domain structs directly.
   Postgres repo has a build-tagged integration test (skipped without DATABASE_URL).
 - `gofmt`/`go vet` clean. Every package has a short doc comment.
 
+## Local quality gate (run before every commit)
+
+- Run `make check` after making changes and BEFORE committing. That is the fast
+  self-correction loop: `fmt-check`, `vet`, `build`, `lint`, `test -race`.
+- Run `make check-all` before pushing for the fuller gate — it adds the 90%
+  `coverage` gate, `arch-test`, and `bdd`.
+- Run `make vuln` (govulncheck) when touching dependencies or `go.mod`; CI runs
+  the same command in a blocking `vuln` job.
+- `make mutation` runs the fast blocking mutation subset CI enforces
+  (`./internal/domain/release`, thresholds in `.gremlins.yaml`); `make
+  mutation-all` is the exhaustive, scheduled run.
+- The lefthook git hooks enforce this automatically once someone has run
+  `lefthook install` locally (pre-commit: fmt-check/vet/lint; pre-push:
+  `make check`) — but agents should run `make check` proactively rather than
+  relying on the hook firing.
+- Why: this shifts the CI sensors left, so problems are detected and
+  self-corrected on the machine that caused them instead of surfacing to a
+  human or the pipeline — the harness-engineering "keep quality left" idea.
+
 ## Definition of done
 
 - `go build ./...` and `go test ./...` both green (unit + httptest layers).
