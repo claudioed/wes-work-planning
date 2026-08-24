@@ -27,15 +27,15 @@ func stateToString(s workunit.State) string {
 
 func (r *WorkUnitRepo) Save(ctx context.Context, unit *workunit.WorkUnit) error {
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO work_units (id, path_id, cpt, reference, state, released_at, completed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO work_units (id, path_id, cpt, reference, sku, state, released_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET
-			path_id = $2, cpt = $3, reference = $4, state = $5, released_at = $6, completed_at = $7
-	`, unit.Id(), unit.PathId().String(), unit.CPT().Time(), unit.Reference(), stateToString(unit.State()), unit.ReleasedAt(), unit.CompletedAt())
+			path_id = $2, cpt = $3, reference = $4, sku = $5, state = $6, released_at = $7, completed_at = $8
+	`, unit.Id(), unit.PathId().String(), unit.CPT().Time(), unit.Reference(), unit.SKU(), stateToString(unit.State()), unit.ReleasedAt(), unit.CompletedAt())
 	return err
 }
 
-func (r *WorkUnitRepo) scanWorkUnit(id, pathIdStr, reference, state string, cpt time.Time, releasedAt, completedAt *time.Time) (*workunit.WorkUnit, error) {
+func (r *WorkUnitRepo) scanWorkUnit(id, pathIdStr, reference, sku, state string, cpt time.Time, releasedAt, completedAt *time.Time) (*workunit.WorkUnit, error) {
 	pathId, err := shared.NewPathId(pathIdStr)
 	if err != nil {
 		return nil, err
@@ -45,6 +45,7 @@ func (r *WorkUnitRepo) scanWorkUnit(id, pathIdStr, reference, state string, cpt 
 	if err != nil {
 		return nil, err
 	}
+	unit.SetSKU(sku)
 
 	switch state {
 	case workunit.Released.String():
@@ -64,27 +65,27 @@ func (r *WorkUnitRepo) scanWorkUnit(id, pathIdStr, reference, state string, cpt 
 }
 
 func (r *WorkUnitRepo) FindById(ctx context.Context, id string) (*workunit.WorkUnit, error) {
-	var pathIdStr, reference, state string
+	var pathIdStr, reference, sku, state string
 	var cpt time.Time
 	var releasedAt, completedAt *time.Time
 
 	row := r.pool.QueryRow(ctx, `
-		SELECT path_id, cpt, reference, state, released_at, completed_at
+		SELECT path_id, cpt, reference, sku, state, released_at, completed_at
 		FROM work_units WHERE id = $1
 	`, id)
-	if err := row.Scan(&pathIdStr, &cpt, &reference, &state, &releasedAt, &completedAt); err != nil {
+	if err := row.Scan(&pathIdStr, &cpt, &reference, &sku, &state, &releasedAt, &completedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ports.ErrNotFound
 		}
 		return nil, err
 	}
 
-	return r.scanWorkUnit(id, pathIdStr, reference, state, cpt, releasedAt, completedAt)
+	return r.scanWorkUnit(id, pathIdStr, reference, sku, state, cpt, releasedAt, completedAt)
 }
 
 func (r *WorkUnitRepo) FindByPathId(ctx context.Context, pathId shared.PathId) ([]*workunit.WorkUnit, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, cpt, reference, state, released_at, completed_at
+		SELECT id, cpt, reference, sku, state, released_at, completed_at
 		FROM work_units WHERE path_id = $1
 	`, pathId.String())
 	if err != nil {
@@ -94,13 +95,13 @@ func (r *WorkUnitRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (
 
 	var out []*workunit.WorkUnit
 	for rows.Next() {
-		var id, reference, state string
+		var id, reference, sku, state string
 		var cpt time.Time
 		var releasedAt, completedAt *time.Time
-		if err := rows.Scan(&id, &cpt, &reference, &state, &releasedAt, &completedAt); err != nil {
+		if err := rows.Scan(&id, &cpt, &reference, &sku, &state, &releasedAt, &completedAt); err != nil {
 			return nil, err
 		}
-		unit, err := r.scanWorkUnit(id, pathId.String(), reference, state, cpt, releasedAt, completedAt)
+		unit, err := r.scanWorkUnit(id, pathId.String(), reference, sku, state, cpt, releasedAt, completedAt)
 		if err != nil {
 			return nil, err
 		}

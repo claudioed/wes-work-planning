@@ -177,6 +177,7 @@ func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
 		PathId:     pathId,
 		CPT:        shared.NewCPT(body.CPT),
 		Reference:  body.Reference,
+		SKU:        body.SKU,
 	})
 	if err != nil {
 		writeError(w, r, err)

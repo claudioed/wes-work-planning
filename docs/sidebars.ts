@@ -86,6 +86,7 @@ const sidebars: SidebarsConfig = {
         'adr/0006-labor-plan-view-not-shift-plan',
         'adr/0007-arch-go-fitness-tests',
         'adr/0008-mcp-inbound-adapter',
+        'adr/0009-product-classification-propagation-to-work-released',
       ],
     },
   ],

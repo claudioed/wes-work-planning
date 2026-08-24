@@ -21,30 +21,64 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
 
+// hazmatTag and fragileTag are the ProductClassification.HandlingTags
+// values inventory-storage uses that this service maps onto the
+// WorkReleased integration event's derived hints (see ADR-0009). Named as
+// constants here — not shared as a Go type across the repository boundary —
+// because this is exactly the same translate-at-the-ACL discipline this
+// adapter already applies to every other cross-service payload.
+const (
+	hazmatTag  = "Hazmat"
+	fragileTag = "Fragile"
+)
+
 // IDGenerator returns a fresh event ID (a UUID v4 in production).
 type IDGenerator func() string
 
+// Writer is the subset of *kafkago.Writer this adapter depends on, so unit
+// tests can substitute a fake without a real broker (mirrors
+// inventory-storage's own outbound/kafka.Writer interface).
+type Writer interface {
+	WriteMessages(ctx context.Context, msgs ...kafkago.Message) error
+	Close() error
+}
+
 // Publisher publishes domain events to warehouse.work-planning.events.
 type Publisher struct {
-	writer    *kafkago.Writer
-	newID     IDGenerator
-	workUnits ports.WorkUnitRepo
+	writer          Writer
+	newID           IDGenerator
+	workUnits       ports.WorkUnitRepo
+	classifications ports.ProductClassificationLookup
 }
 
 // NewPublisher constructs a Publisher writing to TopicWorkPlanningEvents on
 // brokers. workUnits is used to enrich WorkReleased events with the CPT and
 // reference the published schema requires (the WorkReleased domain event
-// itself only carries the work unit ID and path ID).
-func NewPublisher(brokers []string, workUnits ports.WorkUnitRepo, newID IDGenerator) *Publisher {
+// itself only carries the work unit ID and path ID). classifications is
+// used to enrich WorkReleased with derived hazmat-capability/fragile hints
+// by looking up the released unit's SKU once at publish time (see
+// ADR-0009); a nil classifications is treated exactly like
+// productclassification.PermissiveLookup — those two optional fields are
+// simply omitted/false, so every existing caller of NewPublisher keeps
+// compiling and behaving unchanged.
+func NewPublisher(brokers []string, workUnits ports.WorkUnitRepo, classifications ports.ProductClassificationLookup, newID IDGenerator) *Publisher {
+	return NewPublisherWithWriter(&kafkago.Writer{
+		Addr:                   kafkago.TCP(brokers...),
+		Topic:                  envelope.TopicWorkPlanningEvents,
+		Balancer:               &kafkago.LeastBytes{},
+		AllowAutoTopicCreation: true,
+	}, workUnits, classifications, newID)
+}
+
+// NewPublisherWithWriter builds a Publisher against an already-constructed
+// Writer — the seam unit tests use to substitute a fake without a real
+// broker; production code should use NewPublisher.
+func NewPublisherWithWriter(writer Writer, workUnits ports.WorkUnitRepo, classifications ports.ProductClassificationLookup, newID IDGenerator) *Publisher {
 	return &Publisher{
-		writer: &kafkago.Writer{
-			Addr:                   kafkago.TCP(brokers...),
-			Topic:                  envelope.TopicWorkPlanningEvents,
-			Balancer:               &kafkago.LeastBytes{},
-			AllowAutoTopicCreation: true,
-		},
-		newID:     newID,
-		workUnits: workUnits,
+		writer:          writer,
+		newID:           newID,
+		workUnits:       workUnits,
+		classifications: classifications,
 	}
 }
 
@@ -120,17 +154,35 @@ func eventTypes(events []shared.DomainEvent) []string {
 func (p *Publisher) dataFor(ctx context.Context, e shared.DomainEvent) (json.RawMessage, error) {
 	switch ev := e.(type) {
 	case shared.WorkReleased:
-		cpt, ref := "", ""
+		cpt, ref, sku := "", "", ""
 		if unit, err := p.workUnits.FindById(ctx, ev.WorkUnitId); err == nil {
 			cpt = unit.CPT().Time().Format(time.RFC3339)
 			ref = unit.Reference()
+			sku = unit.SKU()
 		}
-		return json.Marshal(map[string]any{
+
+		requiredCapabilities, fragile := p.classificationHints(ctx, sku)
+
+		data := map[string]any{
 			"path_id":      ev.PathId.String(),
 			"work_unit_id": ev.WorkUnitId,
 			"cpt":          cpt,
 			"ref":          ref,
-		})
+		}
+		// Strictly additive and backward compatible: only set these two
+		// optional fields when there is something to say. An unclassified
+		// SKU or an unavailable lookup omits them entirely rather than
+		// publishing an empty array / explicit false, so a consumer that
+		// already treats "absent" as "no hint" (fulfillment-execution's
+		// documented default) sees no difference from before this feature
+		// existed.
+		if len(requiredCapabilities) > 0 {
+			data["required_capabilities"] = requiredCapabilities
+		}
+		if fragile {
+			data["fragile"] = fragile
+		}
+		return json.Marshal(data)
 	case shared.ChargeForecastReceived:
 		return json.Marshal(map[string]any{"path_id": ev.PathId.String()})
 	case shared.ShiftPlanCommitted:
@@ -150,4 +202,35 @@ func (p *Publisher) dataFor(ctx context.Context, e shared.DomainEvent) (json.Raw
 	default:
 		return json.Marshal(map[string]any{})
 	}
+}
+
+// classificationHints looks up sku's ProductClassification once, at
+// publish time, and derives the two optional WorkReleased hints from it:
+// "hazmat" appended to requiredCapabilities when the SKU is classified
+// Hazmat, and fragile=true when it is classified Fragile. This is the
+// concrete implementation of ADR-0009's "read-once-at-release, stamp onto
+// WorkReleased" decision — fulfillment-execution's Task then carries these
+// hints without ever calling back to inventory-storage.
+//
+// A missing sku, a nil classifications port, an unclassified SKU (Known
+// but no relevant tag, or altogether unknown), or a lookup error are all
+// treated identically: no hints. This is deliberately permissive/fail-open
+// — unlike inventory-storage's own StowStock placement check, a
+// classification-lookup problem here must never block or delay releasing
+// work; it can only omit an optional enrichment.
+func (p *Publisher) classificationHints(ctx context.Context, sku string) (requiredCapabilities []string, fragile bool) {
+	if sku == "" || p.classifications == nil {
+		return nil, false
+	}
+
+	view, err := p.classifications.GetClassification(ctx, sku)
+	if err != nil || !view.Known {
+		return nil, false
+	}
+
+	if view.HasTag(hazmatTag) {
+		requiredCapabilities = append(requiredCapabilities, "hazmat")
+	}
+	fragile = view.HasTag(fragileTag)
+	return requiredCapabilities, fragile
 }

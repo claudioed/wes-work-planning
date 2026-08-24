@@ -54,6 +54,8 @@ physical world violates several times a minute.
 | **Reference** | The external identifier a work unit points back at (e.g. an order line). Required and non-empty. |
 | **LaborPlanObserved** | Read-only projection, keyed by `path_id`, of the labour plan Workforce Management last committed. |
 | **UsableInventoryObserved** | Read-only projection, keyed by **SKU**, of usable quantity as Inventory last reported it. |
+| **SKU** (on `WorkUnit`) | Optional inventory SKU the work unit's order line corresponds to. Empty is valid — not every caller knows one. Exists solely so `ReleaseNextWork`'s outbound publisher can look up a `ProductClassificationView` once, at release time. |
+| **ProductClassificationView** | A plain, un-persisted read model — the result of a **synchronous** HTTP read from inventory-storage's `GET /products/{sku}/classification`, made once at release time. Not a Kafka projection (see the trap below). |
 
 ## The traps
 
@@ -93,3 +95,22 @@ Backlog depth, actual rate and plan-vs-actual are **projections**. They are
 computed from pool state or built from events; none of them is a field
 maintained on an aggregate. Storing them on an aggregate would create a second
 source of truth that drifts. See [Read models](../ddd/read-models.md).
+
+### Trap 4 — `ProductClassificationView` is not `UsableInventoryObserved`
+
+Both originate in `inventory-storage`, both are keyed by SKU, and it would be
+easy to assume they arrive the same way. They do not.
+
+`UsableInventoryObserved` is a **persisted Kafka projection**: `StockReserved`
+and `ReservationRevoked` are part of inventory-storage's published integration
+contract, so this service consumes them continuously and keeps a running
+read model in Postgres/memory.
+
+`ProductClassificationView` is a **synchronous HTTP read, not persisted at
+all**. inventory-storage's `ProductClassified` event exists in its domain-event
+catalogue but its own outbound Kafka publisher explicitly does not forward it
+to the broker (see that repo's `publisher.go` doc comment) — there is nothing
+to consume. Instead, `ReleaseNextWork`'s outbound publisher calls
+`GET /products/{sku}/classification` **once**, at the moment a unit is
+released, and stamps the result onto that one `WorkReleased` event. See
+[ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md).
