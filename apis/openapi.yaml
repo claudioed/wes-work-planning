@@ -280,6 +280,7 @@ paths:
                 cpt: "2026-08-21T12:00:00Z"
                 reference: order-77213-line-1
                 state: Pending
+                giftWrap: false
         "400":
           $ref: "#/components/responses/BadRequest"
         "409":
@@ -329,6 +330,7 @@ paths:
                 cpt: "2026-08-21T12:00:00Z"
                 reference: order-77213-line-1
                 state: Released
+                giftWrap: false
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -515,6 +517,7 @@ paths:
                 cpt: "2026-08-21T12:00:00Z"
                 reference: order-77213-line-1
                 state: Completed
+                giftWrap: false
         "404":
           description: No work unit exists with this id.
           content:
