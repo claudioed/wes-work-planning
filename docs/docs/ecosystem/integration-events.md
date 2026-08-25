@@ -79,7 +79,7 @@ wired.
 ## Consumed
 
 Setting `KAFKA_BROKERS` starts the consumer automatically, **independent of
-`EVENT_PUBLISHER`**. It reads three topics concurrently, one goroutine each.
+`EVENT_PUBLISHER`**. It reads four topics concurrently, one goroutine each.
 
 ### `warehouse.workforce.events` — `ShiftPlanCommitted`
 
@@ -136,6 +136,41 @@ SKU-scoped, and a SKU-to-path mapping does not exist in the domain.
 `POST /work-units/{id}/complete` uses. No new use case; the inbound adapter is
 the only new thing.
 
+### `warehouse.order-management.events` — `OrderAllocated`, `OrderPartiallyAllocated`
+
+```json
+{
+  "event_id": "...", "event_type": "OrderAllocated",
+  "occurred_at": "...", "source": "order-management",
+  "data": {
+    "order_id": "order-1", "promise_date": "2026-08-22T02:00:00Z",
+    "lines": [{"line_no": 1, "sku": "SKU-1", "path_id": "pick-a", "gift_wrap": false}]
+  }
+}
+```
+
+Both event types share this identical `data` shape and are handled
+identically — both mean "these lines are ready to enqueue". This is the
+event-choreography replacement for order-management's former **synchronous**
+call to `POST /paths/{pathId}/work-units`: order-management (a new, 6th
+bounded context, upstream Customer of this service) now publishes here once
+it has allocated stock and locally marked an order line Released.
+
+For each entry in `lines`, the handler calls the **existing** `EnqueueWorkUnit`
+use case directly (no new use case), deriving a **deterministic**
+`work_unit_id` as `"{order_id}-line-{line_no}"` — so the same order line
+always maps to the same work unit, which is a second line of defense against
+duplicate enqueues on top of the `processed_events` idempotency guard (see
+below).
+
+This integration is deliberately **fire-and-forget**: there is no reply event
+back to order-management. The existing `WorkUnitCreated`/`WorkReleased`
+events already published on `warehouse.work-planning.events` remain the only
+observable signal of downstream progress — the same signal every other
+`EnqueueWorkUnit` caller (including the REST endpoint) already relies on.
+This was a confirmed v1 design choice made when rejecting order-management's
+former synchronous HTTP coupling, not an oversight.
+
 ## Idempotency
 
 Kafka is at-least-once, so redelivery is normal, not exceptional. Every
@@ -165,6 +200,7 @@ Observable consequences, each covered by a unit test:
 | `ReservationRevoked` | usable quantity is **not** double-incremented |
 | `ShiftPlanCommitted` | the labour projection is **not** re-written |
 | `TaskCompleted` | `RecordCompletion` is **not** called a second time |
+| `OrderAllocated` / `OrderPartiallyAllocated` | `EnqueueWorkUnit` is **not** called a second time per line |
 
 The last one matters operationally: `WorkUnit.Complete` already rejects
 double-completion with `ErrAlreadyCompleted`, so the aggregate would be safe

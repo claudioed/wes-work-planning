@@ -4,12 +4,12 @@ title: Ecosystem
 sidebar_label: Introduction
 sidebar_position: 0
 slug: /ecosystem/
-description: Where this service sits among the five warehouse-systems bounded contexts.
+description: Where this service sits among the six warehouse-systems bounded contexts.
 ---
 
 # Ecosystem
 
-`warehouse-systems` is five Go services, each a bounded context with its own
+`warehouse-systems` is six Go services, each a bounded context with its own
 model, its own database and its own deployment lifecycle. This one is the WES
 tier's core — the conductor.
 
@@ -17,14 +17,15 @@ tier's core — the conductor.
 |---|---|
 | [Context map](./context-map.md) | The diagram: what is actually wired today, and what is only strategically related |
 | [Integration events](./integration-events.md) | Every topic published and consumed, with real payloads and idempotency behaviour |
-| [Sibling services](./sibling-services.md) | What each of the other four owns |
+| [Sibling services](./sibling-services.md) | What each of the other five owns |
 
-## The five services
+## The six services
 
 ```mermaid
 flowchart TB
     subgraph wms["WMS tier — what &amp; where"]
         INV["inventory-storage<br/><i>Core</i>"]
+        OM["order-management<br/><i>Core</i>"]
     end
     subgraph wes["WES tier — when &amp; in what order"]
         WP["<b>wes-work-planning</b><br/><i>Core — this service</i>"]
@@ -37,6 +38,7 @@ flowchart TB
 
     INV -->|"StockReserved<br/>ReservationRevoked"| WP
     WM -->|"ShiftPlanCommitted"| WP
+    OM -->|"OrderAllocated<br/>OrderPartiallyAllocated"| WP
     WP -->|"WorkReleased"| FE
     FE -->|"TaskCompleted"| WP
 
@@ -44,5 +46,5 @@ flowchart TB
     style FL stroke-dasharray: 5 5
 ```
 
-Four live Kafka edges, all of them touching this service. `facility-layout`
+Five live Kafka edges, all of them touching this service. `facility-layout`
 (dashed) has no live integration with anything yet.

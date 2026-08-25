@@ -99,6 +99,32 @@ contexts, which is what makes the handoff coherent without a shared type.
 
 ---
 
+## `order-management` — **Core**
+
+> Allocates stock against orders and marks order lines Released, ready for
+> warehouse execution.
+
+The newest bounded context in the platform. It used to call this service's
+`POST /paths/{pathId}/work-units` synchronously to release work — a coupling
+this service's owners rejected once order-management existed as its own
+context, in favor of the same event-choreography pattern already used by
+`inventory-storage` and `workforce-management`.
+
+| | |
+|---|---|
+| Publishes | `OrderAllocated`, `OrderPartiallyAllocated` on `warehouse.order-management.events` |
+
+**Relationship to this service:** upstream Customer/Supplier, behind our ACL,
+same as `inventory-storage` and `workforce-management`. We consume both event
+types identically — each carries `order_id`, `promise_date`, and a `lines`
+array — and call the existing `EnqueueWorkUnit` use case once per line, with
+a deterministic `work_unit_id` derived as `"{order_id}-line-{line_no}"`. This
+edge is deliberately **fire-and-forget**: no reply event is published back to
+order-management. See
+[Integration events](../ecosystem/integration-events.md#warehouseorder-managementevents--orderallocated-orderpartiallyallocated).
+
+---
+
 ## `facility-layout` — **Generic**
 
 > The system of record for **where things physically are in the building**: the
@@ -127,7 +153,7 @@ Published Language rather than modelling physical structure itself.
 
 ---
 
-## What all five share
+## What all six share
 
 Conventions, not code. Each service re-implements these; none of them is a
 shared library, so no service can force another to redeploy:
@@ -139,6 +165,6 @@ shared library, so no service can force another to redeploy:
 - RFC 7807 problem details, an `apis/openapi.yaml` linted by Spectral in CI,
   and a Helm chart
 
-That last point is the real payoff of five bounded contexts that agree on
+That last point is the real payoff of six bounded contexts that agree on
 conventions while sharing no types: the *shape* is familiar everywhere, and the
 *models* stay independent.

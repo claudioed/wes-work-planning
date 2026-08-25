@@ -327,6 +327,19 @@ same `ports.EventPublisher` interface the log publisher does.
   case (`RecordCompletionRequest.WorkUnitId`), transitioning that work unit
   from Released to Completed exactly as `POST /work-units/{id}/complete`
   would. No new use case — this is additive wiring only.
+- Topic `warehouse.order-management.events`, event types `OrderAllocated` and
+  `OrderPartiallyAllocated` — `data` (identical shape for both):
+  `{"order_id","promise_date","lines":[{"line_no","sku","path_id","gift_wrap"}]}`.
+  Replaces order-management's former synchronous call to
+  `POST /paths/{pathId}/work-units` with event choreography: order-management
+  publishes here once it has allocated stock and locally marked an order line
+  Released. For each line, `data.order_id`/`line.line_no` derive a
+  deterministic `work_unit_id` (`"{order_id}-line-{line_no}"`), and the
+  existing `EnqueueWorkUnit` use case is called directly — no new use case.
+  Deliberately fire-and-forget: there is no reply event back to
+  order-management; the existing `WorkUnitCreated`/`WorkReleased` events on
+  `warehouse.work-planning.events` remain the only observable signal of
+  downstream progress, same as for every other `EnqueueWorkUnit` caller.
 
 Setting `KAFKA_BROKERS` starts this consumer automatically, independent of
 `EVENT_PUBLISHER`.

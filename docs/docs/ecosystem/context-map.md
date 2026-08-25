@@ -21,12 +21,14 @@ consumer, verified against each service's own `CLAUDE.md` and adapter code.
 flowchart LR
     WM["<b>workforce-management</b><br/>Supporting subdomain<br/>headcount planning per path"]
     INV["<b>inventory-storage</b><br/>WMS tier · Core subdomain<br/>stock ledger, bin-accurate location,<br/>revocable reservations"]
+    OM["<b>order-management</b><br/>Core subdomain<br/>order allocation → release"]
     WP["<b>wes-work-planning</b><br/>WES tier · Core subdomain<br/><i>the conductor</i><br/>charge → plan → release → balance"]
     FE["<b>fulfillment-execution</b><br/>Core subdomain<br/>Pick / Pack / SLAM task lifecycle<br/>pull-based claimNext + leases"]
     FL["<b>facility-layout</b><br/>Generic subdomain<br/>Site → Zone → Aisle → LocationSlot<br/><i>no live integration yet</i>"]
 
     WM -- "warehouse.workforce.events<br/><b>ShiftPlanCommitted</b><br/>→ LaborPlanObserved (by path_id)" --> WP
     INV -- "warehouse.inventory.events<br/><b>StockReserved</b> / <b>ReservationRevoked</b><br/>→ UsableInventoryObserved (by sku)" --> WP
+    OM -- "warehouse.order-management.events<br/><b>OrderAllocated</b> / <b>OrderPartiallyAllocated</b><br/>→ EnqueueWorkUnit per line (fire-and-forget)" --> WP
     WP -- "warehouse.work-planning.events<br/><b>WorkReleased</b><br/>→ becomes a Task" --> FE
     FE -- "warehouse.fulfillment.events<br/><b>TaskCompleted</b><br/>→ RecordCompletion" --> WP
 
@@ -36,10 +38,10 @@ flowchart LR
     style FL stroke-dasharray: 6 4,color:#777777
 ```
 
-That is the complete set. There are **four live edges**, and every one of them
+That is the complete set. There are **five live edges**, and every one of them
 touches this service — which is what "conductor" means concretely: this is the
-only context in the platform that both consumes from two upstream contexts and
-participates in a closed loop with a third.
+only context in the platform that both consumes from three upstream contexts and
+participates in a closed loop with a fourth.
 
 ### The loop
 
@@ -75,12 +77,14 @@ line up, which is precisely why both are drawn.
 flowchart TB
     INV["inventory-storage<br/><b>OHS + Published Language</b>"]
     WM["workforce-management"]
+    OM["order-management<br/><b>OHS + Published Language</b>"]
     WP["wes-work-planning<br/><b>ACL inbound</b> · <b>OHS outbound</b>"]
     FE["fulfillment-execution"]
     FL["facility-layout<br/><b>OHS</b> for physical-location truth"]
 
     INV -- "Customer/Supplier<br/>we conform, behind our ACL" --> WP
     WM -- "Customer/Supplier<br/>we conform, behind our ACL" --> WP
+    OM -- "Customer/Supplier<br/>we conform, behind our ACL" --> WP
     WP -- "Customer/Supplier<br/>we are the supplier (OHS/PL)" --> FE
     FE -- "Customer/Supplier<br/>roles reversed on the feedback edge" --> WP
     FL -. "Conformist — <b>if</b> we ever need<br/>physical location; not today" .-> WP
@@ -99,9 +103,21 @@ or inventory aggregates.
 
 In this repository that ACL is not a diagram box, it is
 `internal/adapters/inbound/kafka/consumer.go`: unexported structs
-(`inventoryEventData`, `shiftPlanCommittedData`, `taskCompletedData`) that hold
-the *foreign* shape and never leave the adapter. What crosses into the
-application layer is a translated call, never a foreign type.
+(`inventoryEventData`, `shiftPlanCommittedData`, `taskCompletedData`,
+`orderAllocatedData`) that hold the *foreign* shape and never leave the
+adapter. What crosses into the application layer is a translated call, never
+a foreign type.
+
+### order-management → WES is Customer/Supplier, choreographed and fire-and-forget
+
+`order-management` is the newest upstream context. It used to call this
+service's `POST /paths/{pathId}/work-units` synchronously — a coupling this
+service's owners deliberately rejected in favor of the same
+publish-and-forget choreography every other upstream context already uses.
+There is **no reply event**: order-management does not learn from Kafka
+whether or when its lines were enqueued, only that it published. That is a
+confirmed v1 design choice, not an oversight — see
+[Integration events](./integration-events.md#warehouseorder-managementevents--orderallocated-orderpartiallyallocated).
 
 ### WES → Execution: we become the host
 
