@@ -100,6 +100,19 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 		t.Fatalf("publish TaskCompleted: %v", err)
 	}
 
+	orderId := fmt.Sprintf("integration-kafka-order-%d", time.Now().UnixNano())
+	orderManagementWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicOrderManagementEvents, AllowAutoTopicCreation: true}
+	defer orderManagementWriter.Close()
+	if err := orderManagementWriter.WriteMessages(publishCtx, kafkago.Message{
+		Key: []byte("evt-order-" + orderId),
+		Value: mustEnvelopeJSON(t, "evt-order-"+orderId, envelope.EventTypeOrderAllocated, "order-management", map[string]any{
+			"order_id": orderId, "promise_date": time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339),
+			"lines": []map[string]any{{"line_no": 1, "sku": sku, "path_id": pathIdValue, "gift_wrap": false}},
+		}),
+	}); err != nil {
+		t.Fatalf("publish OrderAllocated: %v", err)
+	}
+
 	laborViews := memory.NewLaborPlanViewRepo()
 	inventoryViews := memory.NewInventoryViewRepo()
 	processed := memory.NewProcessedEventRepo()
@@ -108,7 +121,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
 
 	groupID := fmt.Sprintf("wes-integration-test-%d", time.Now().UnixNano())
-	consumer := inboundkafka.NewConsumer(brokers, groupID, observeLabor, observeInventory, recordCompletion, processed, nil)
+	consumer := inboundkafka.NewConsumer(brokers, groupID, observeLabor, observeInventory, recordCompletion, enqueue, processed, nil)
 	defer consumer.Close()
 
 	consumeCtx, cancel := context.WithCancel(context.Background())
@@ -161,6 +174,22 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("work unit never completed from TaskCompleted event, state=%v", unit.State())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	orderLineWorkUnitId := fmt.Sprintf("%s-line-1", orderId)
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		unit, err := workUnits.FindById(context.Background(), orderLineWorkUnitId)
+		if err == nil {
+			if unit.SKU() != sku {
+				t.Fatalf("got sku %q, want %q", unit.SKU(), sku)
+			}
+			break
+		}
+		if err != ports.ErrNotFound || time.Now().After(deadline) {
+			t.Fatalf("work unit never enqueued from OrderAllocated event: %v", err)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
