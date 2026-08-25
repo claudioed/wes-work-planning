@@ -57,6 +57,12 @@ type enqueueWorkUnitRequestDTO struct {
 	// event can carry derived hazmat/fragile hints (see ADR-0009). Absent
 	// or empty is valid — not every caller knows a SKU.
 	SKU string `json:"sku,omitempty"`
+	// GiftWrap is optional: whether the requester asked the warehouse to
+	// produce a gift package for this work unit, if known at enqueue
+	// time. Threaded through so the released WorkReleased integration
+	// event carries it directly (see ADR-0010) — unlike SKU, this is
+	// never looked up from another service. Absent defaults to false.
+	GiftWrap bool `json:"giftWrap,omitempty"`
 }
 
 type workUnitResponseDTO struct {
@@ -65,6 +71,7 @@ type workUnitResponseDTO struct {
 	CPT       time.Time `json:"cpt"`
 	Reference string    `json:"reference"`
 	State     string    `json:"state"`
+	GiftWrap  bool      `json:"giftWrap"`
 }
 
 type backlogSnapshotResponseDTO struct {

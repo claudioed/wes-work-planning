@@ -154,11 +154,12 @@ func eventTypes(events []shared.DomainEvent) []string {
 func (p *Publisher) dataFor(ctx context.Context, e shared.DomainEvent) (json.RawMessage, error) {
 	switch ev := e.(type) {
 	case shared.WorkReleased:
-		cpt, ref, sku := "", "", ""
+		cpt, ref, sku, giftWrap := "", "", "", false
 		if unit, err := p.workUnits.FindById(ctx, ev.WorkUnitId); err == nil {
 			cpt = unit.CPT().Time().Format(time.RFC3339)
 			ref = unit.Reference()
 			sku = unit.SKU()
+			giftWrap = unit.GiftWrap()
 		}
 
 		requiredCapabilities, fragile := p.classificationHints(ctx, sku)
@@ -181,6 +182,13 @@ func (p *Publisher) dataFor(ctx context.Context, e shared.DomainEvent) (json.Raw
 		}
 		if fragile {
 			data["fragile"] = fragile
+		}
+		// gift_wrap is a caller-stated WorkReleased characteristic, not a
+		// classification hint — read straight off the WorkUnit (like
+		// cpt/ref), never derived from classificationHints (see ADR-0010).
+		// Same omit-when-false discipline as fragile.
+		if giftWrap {
+			data["gift_wrap"] = giftWrap
 		}
 		return json.Marshal(data)
 	case shared.ChargeForecastReceived:

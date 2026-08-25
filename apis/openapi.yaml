@@ -833,6 +833,16 @@ components:
             inventory-storage's product classification at release time (see
             ADR-0009). Omit when the SKU is not known to the caller.
           example: sku-482910
+        giftWrap:
+          type: boolean
+          description: >-
+            OPTIONAL. Whether the requester asked the warehouse to produce a
+            gift package for this work unit, stated at enqueue time. This is
+            a caller-stated WorkReleased characteristic, not a product
+            attribute — unlike `sku`, it is never looked up from another
+            service (see ADR-0010). Omit or false when gift wrap was not
+            requested.
+          example: true
       required: [workUnitId, cpt, reference]
 
     WorkUnitState:
@@ -862,7 +872,14 @@ components:
           example: order-77213-line-1
         state:
           $ref: "#/components/schemas/WorkUnitState"
-      required: [id, pathId, cpt, reference, state]
+        giftWrap:
+          type: boolean
+          description: >-
+            Whether the requester asked the warehouse to produce a gift
+            package for this work unit (see ADR-0010). False when not
+            requested.
+          example: false
+      required: [id, pathId, cpt, reference, state, giftWrap]
 
     PoolMode:
       type: string

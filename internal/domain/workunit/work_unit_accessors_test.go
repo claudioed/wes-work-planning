@@ -98,3 +98,21 @@ func TestWorkUnit_SKU_DefaultsEmptyAndIsSettable(t *testing.T) {
 		t.Fatalf("got SKU %q, want sku-482910", got)
 	}
 }
+
+func TestWorkUnit_GiftWrap_DefaultsFalseAndIsSettable(t *testing.T) {
+	w := mustWorkUnit(t)
+
+	if got := w.GiftWrap(); got != false {
+		t.Fatalf("got GiftWrap %v, want false by default", got)
+	}
+
+	w.SetGiftWrap(true)
+	if got := w.GiftWrap(); got != true {
+		t.Fatalf("got GiftWrap %v, want true", got)
+	}
+
+	w.SetGiftWrap(false)
+	if got := w.GiftWrap(); got != false {
+		t.Fatalf("got GiftWrap %v, want false after unsetting", got)
+	}
+}

@@ -189,6 +189,55 @@ func TestEnqueueWorkUnit_OmittedSKUDefaultsEmpty(t *testing.T) {
 	}
 }
 
+func TestEnqueueWorkUnit_ThreadsOptionalGiftWrapThroughToTheWorkUnit(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	unit, err := uc.Execute(context.Background(), usecases.EnqueueWorkUnitRequest{
+		WorkUnitId: "wu-gift-wrap-1",
+		PathId:     pathId,
+		CPT:        cpt,
+		Reference:  "order-line-1",
+		GiftWrap:   true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := unit.GiftWrap(); got != true {
+		t.Fatalf("got GiftWrap %v, want true", got)
+	}
+
+	stored, err := f.workUnits.FindById(context.Background(), "wu-gift-wrap-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := stored.GiftWrap(); got != true {
+		t.Fatalf("got stored GiftWrap %v, want true", got)
+	}
+}
+
+func TestEnqueueWorkUnit_OmittedGiftWrapDefaultsFalse(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	unit, err := uc.Execute(context.Background(), usecases.EnqueueWorkUnitRequest{
+		WorkUnitId: "wu-no-gift-wrap",
+		PathId:     pathId,
+		CPT:        cpt,
+		Reference:  "order-line-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := unit.GiftWrap(); got != false {
+		t.Fatalf("got GiftWrap %v, want false", got)
+	}
+}
+
 func TestReleaseNextWork_ReleasesEarliestCPT(t *testing.T) {
 	f := newFixture()
 	enqueue := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
