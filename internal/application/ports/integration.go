@@ -6,6 +6,7 @@ import (
 
 	"github.com/claudioed/wes-work-planning/internal/domain/inventoryview"
 	"github.com/claudioed/wes-work-planning/internal/domain/laborview"
+	"github.com/claudioed/wes-work-planning/internal/domain/productclassificationview"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
 
@@ -33,4 +34,18 @@ type ProcessedEventRepo interface {
 	// before. It returns alreadyProcessed=true (and applies no state change)
 	// when the event was already recorded.
 	TryMarkProcessed(ctx context.Context, eventId string, processedAt time.Time) (alreadyProcessed bool, err error)
+}
+
+// ProductClassificationLookup is the outbound port for the synchronous
+// cross-context read from inventory-storage's product-classification
+// endpoint (GET /products/{sku}/classification), used at work-release time
+// to stamp derived hazmat/fragile hints onto the published WorkReleased
+// event without a live callback from fulfillment-execution (see ADR-0009).
+//
+// This is a synchronous HTTP read, not a Kafka projection, because
+// inventory-storage's own outbound Kafka publisher does not forward
+// ProductClassified to the broker — see the productclassificationview
+// package doc comment for the evidence.
+type ProductClassificationLookup interface {
+	GetClassification(ctx context.Context, sku string) (productclassificationview.ProductClassificationView, error)
 }

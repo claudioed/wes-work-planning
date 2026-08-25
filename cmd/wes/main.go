@@ -20,6 +20,7 @@ import (
 	outboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/outbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/productclassification"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
@@ -107,13 +108,14 @@ func run() error {
 	}
 
 	var publisher ports.EventPublisher
+	classifications := buildClassificationLookup(getenv("PRODUCT_CLASSIFICATION_MODE", "permissive"), os.Getenv("INVENTORY_STORAGE_BASE_URL"), logger)
 	switch eventPublisherKind {
 	case "kafka":
 		if kafkaBrokers == "" {
 			return fmt.Errorf("EVENT_PUBLISHER=kafka requires KAFKA_BROKERS to be set")
 		}
 		logger.Info("event publisher configured", "publisher", "kafka", "brokers", kafkaBrokers)
-		kafkaPublisher := outboundkafka.NewPublisher(brokerList(kafkaBrokers), workUnits, newEventID)
+		kafkaPublisher := outboundkafka.NewPublisher(brokerList(kafkaBrokers), workUnits, classifications, newEventID)
 		defer func() { _ = kafkaPublisher.Close() }()
 		publisher = kafkaPublisher
 	default:
@@ -230,4 +232,18 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// buildClassificationLookup selects the outbound
+// ports.ProductClassificationLookup adapter via PRODUCT_CLASSIFICATION_MODE
+// (http|permissive), defaulting to "permissive" so existing tests, CI and
+// deployments that do not set the env var are unaffected — mirroring
+// inventory-storage's own LOCATION_LOOKUP_MODE=http|permissive pattern (see
+// ADR-0009). "http" requires INVENTORY_STORAGE_BASE_URL.
+func buildClassificationLookup(mode, inventoryStorageBaseURL string, logger *slog.Logger) ports.ProductClassificationLookup {
+	if !strings.EqualFold(mode, "http") {
+		return productclassification.NewPermissiveLookup()
+	}
+	logger.Info("product classification lookup configured", "mode", "http", "inventory_storage_base_url", inventoryStorageBaseURL)
+	return productclassification.NewClient(inventoryStorageBaseURL, nil)
 }

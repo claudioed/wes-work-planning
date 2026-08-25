@@ -140,6 +140,55 @@ func TestEnqueueWorkUnit_CreatesPoolOnFirstUse(t *testing.T) {
 	}
 }
 
+func TestEnqueueWorkUnit_ThreadsOptionalSKUThroughToTheWorkUnit(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	unit, err := uc.Execute(context.Background(), usecases.EnqueueWorkUnitRequest{
+		WorkUnitId: "wu-sku-1",
+		PathId:     pathId,
+		CPT:        cpt,
+		Reference:  "order-line-1",
+		SKU:        "sku-482910",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := unit.SKU(); got != "sku-482910" {
+		t.Fatalf("got SKU %q, want sku-482910", got)
+	}
+
+	stored, err := f.workUnits.FindById(context.Background(), "wu-sku-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := stored.SKU(); got != "sku-482910" {
+		t.Fatalf("got stored SKU %q, want sku-482910", got)
+	}
+}
+
+func TestEnqueueWorkUnit_OmittedSKUDefaultsEmpty(t *testing.T) {
+	f := newFixture()
+	uc := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-a")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+
+	unit, err := uc.Execute(context.Background(), usecases.EnqueueWorkUnitRequest{
+		WorkUnitId: "wu-no-sku",
+		PathId:     pathId,
+		CPT:        cpt,
+		Reference:  "order-line-1",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := unit.SKU(); got != "" {
+		t.Fatalf("got SKU %q, want empty", got)
+	}
+}
+
 func TestReleaseNextWork_ReleasesEarliestCPT(t *testing.T) {
 	f := newFixture()
 	enqueue := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)

@@ -34,6 +34,13 @@ type EnqueueWorkUnitRequest struct {
 	PathId     shared.PathId
 	CPT        shared.CPT
 	Reference  string
+	// SKU is optional: the inventory SKU this order line corresponds to,
+	// if known. Threaded through to the WorkUnit so the outbound
+	// WorkReleased publisher can look up its ProductClassification once,
+	// at release time, and stamp derived hazmat/fragile hints onto the
+	// published event (see ADR-0009). Empty is a valid value — not every
+	// caller knows a SKU.
+	SKU string
 }
 
 func (uc *EnqueueWorkUnit) Execute(ctx context.Context, req EnqueueWorkUnitRequest) (*workunit.WorkUnit, error) {
@@ -41,6 +48,7 @@ func (uc *EnqueueWorkUnit) Execute(ctx context.Context, req EnqueueWorkUnitReque
 	if err != nil {
 		return nil, err
 	}
+	unit.SetSKU(req.SKU)
 
 	pool, err := uc.pools.FindByPathId(ctx, req.PathId)
 	if errors.Is(err, ports.ErrNotFound) {

@@ -74,6 +74,8 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
 | `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published         |
 | `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
+| `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
+| `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
 
 ## API
 
@@ -291,6 +293,15 @@ Topic `warehouse.work-planning.events`:
 - **`WorkReleased`** — published when `ReleaseNextWork` releases a unit.
   `data`: `{"path_id","work_unit_id","cpt","ref"}`. Consumed downstream by
   fulfillment-execution, which turns it into a Task.
+
+  Additive: `data` also carries two OPTIONAL fields when there is a hint to
+  give — `required_capabilities` (array, containing `"hazmat"` when the
+  released unit's SKU is classified `Hazmat` in inventory-storage) and
+  `fragile` (bool, `true` when the SKU is classified `Fragile`). Looked up
+  once, synchronously, from inventory-storage's
+  `GET /products/{sku}/classification` at publish time — see
+  [ADR-0009](./docs/docs/adr/0009-product-classification-propagation-to-work-released.md).
+  Both fields are omitted, not defaulted to empty/false, when unavailable.
 
 Set `EVENT_PUBLISHER=kafka` (and `KAFKA_BROKERS`) to publish here instead of
 the default `log` publisher; `internal/adapters/outbound/kafka` implements the

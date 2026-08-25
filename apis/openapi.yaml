@@ -824,6 +824,15 @@ components:
           minLength: 1
           description: An external reference this work unit corresponds to (e.g. an order line).
           example: order-77213-line-1
+        sku:
+          type: string
+          description: >-
+            OPTIONAL inventory SKU this order line corresponds to, if known.
+            When set, ReleaseNextWork's outbound WorkReleased event carries
+            derived hazmat-capability/fragile hints looked up once from
+            inventory-storage's product classification at release time (see
+            ADR-0009). Omit when the SKU is not known to the caller.
+          example: sku-482910
       required: [workUnitId, cpt, reference]
 
     WorkUnitState:
