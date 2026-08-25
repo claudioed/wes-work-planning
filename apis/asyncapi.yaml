@@ -75,10 +75,16 @@ info:
     ShiftPlan aggregate, which is a different model that happens to share the
     name), `StockReserved` and `ReservationRevoked` from inventory-storage on
     `warehouse.inventory.events` (projected into the SKU-keyed
-    `UsableInventoryObserved` view), and `TaskCompleted` from
+    `UsableInventoryObserved` view), `TaskCompleted` from
     fulfillment-execution on `warehouse.fulfillment.events` (fed into the
-    `RecordCompletion` use case to close the execution feedback loop). All
-    consumer paths are idempotent under at-least-once redelivery.
+    `RecordCompletion` use case to close the execution feedback loop), and
+    `OrderAllocated`/`OrderPartiallyAllocated` from order-management on
+    `warehouse.order-management.events` (fed into the existing
+    `EnqueueWorkUnit` use case, once per order line — the event-choreography
+    replacement for order-management's former synchronous call to
+    `POST /paths/{pathId}/work-units`; deliberately fire-and-forget, with no
+    reply event published back). All consumer paths are idempotent under
+    at-least-once redelivery.
   contact:
     name: WES Work Planning Team
     url: https://warehouse-systems.internal/teams/wes-work-planning

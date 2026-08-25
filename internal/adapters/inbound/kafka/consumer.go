@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
+	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel/attribute"
@@ -20,6 +22,7 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/release"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
 
@@ -48,23 +51,47 @@ type taskCompletedData struct {
 	WorkUnitId string `json:"work_unit_id"`
 }
 
-// Consumer consumes warehouse.workforce.events, warehouse.inventory.events,
-// and warehouse.fulfillment.events. The first two are projected into the
-// labor-plan-view and inventory-view read models; TaskCompleted from the
-// third is fed directly into the existing RecordCompletion use case to close
-// the control loop's feedback edge from Execution back to this service.
-type Consumer struct {
-	workforceReader   *kafkago.Reader
-	inventoryReader   *kafkago.Reader
-	fulfillmentReader *kafkago.Reader
-	observeLabor      *usecases.ObserveLaborPlan
-	observeInventory  *usecases.ObserveInventoryChange
-	recordCompletion  *usecases.RecordCompletion
-	processed         ports.ProcessedEventRepo
-	logger            *slog.Logger
+// orderAllocatedData is order-management's OrderAllocated /
+// OrderPartiallyAllocated payload — both event types share this identical
+// shape, since both mean "these lines are ready to enqueue".
+type orderAllocatedData struct {
+	OrderId     string          `json:"order_id"`
+	PromiseDate time.Time       `json:"promise_date"`
+	Lines       []orderLineData `json:"lines"`
 }
 
-func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, processed ports.ProcessedEventRepo, logger *slog.Logger) *Consumer {
+// orderLineData is one allocated-and-released order line within an
+// OrderAllocated/OrderPartiallyAllocated payload.
+type orderLineData struct {
+	LineNo   int    `json:"line_no"`
+	SKU      string `json:"sku"`
+	PathId   string `json:"path_id"`
+	GiftWrap bool   `json:"gift_wrap"`
+}
+
+// Consumer consumes warehouse.workforce.events, warehouse.inventory.events,
+// warehouse.fulfillment.events, and warehouse.order-management.events. The
+// first two are projected into the labor-plan-view and inventory-view read
+// models; TaskCompleted from the third is fed directly into the existing
+// RecordCompletion use case to close the control loop's feedback edge from
+// Execution back to this service; OrderAllocated/OrderPartiallyAllocated
+// from the fourth is fed directly into the existing EnqueueWorkUnit use
+// case, replacing order-management's former synchronous HTTP call to
+// POST /paths/{pathId}/work-units with event choreography.
+type Consumer struct {
+	workforceReader       *kafkago.Reader
+	inventoryReader       *kafkago.Reader
+	fulfillmentReader     *kafkago.Reader
+	orderManagementReader *kafkago.Reader
+	observeLabor          *usecases.ObserveLaborPlan
+	observeInventory      *usecases.ObserveInventoryChange
+	recordCompletion      *usecases.RecordCompletion
+	enqueueWorkUnit       *usecases.EnqueueWorkUnit
+	processed             ports.ProcessedEventRepo
+	logger                *slog.Logger
+}
+
+func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, enqueueWorkUnit *usecases.EnqueueWorkUnit, processed ports.ProcessedEventRepo, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		workforceReader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
@@ -81,9 +108,15 @@ func NewConsumer(brokers []string, groupID string, observeLabor *usecases.Observ
 			GroupID: groupID,
 			Topic:   envelope.TopicFulfillmentEvents,
 		}),
+		orderManagementReader: kafkago.NewReader(kafkago.ReaderConfig{
+			Brokers: brokers,
+			GroupID: groupID,
+			Topic:   envelope.TopicOrderManagementEvents,
+		}),
 		observeLabor:     observeLabor,
 		observeInventory: observeInventory,
 		recordCompletion: recordCompletion,
+		enqueueWorkUnit:  enqueueWorkUnit,
 		processed:        processed,
 		logger:           logger,
 	}
@@ -93,17 +126,19 @@ func (c *Consumer) Close() error {
 	err1 := c.workforceReader.Close()
 	err2 := c.inventoryReader.Close()
 	err3 := c.fulfillmentReader.Close()
-	return errors.Join(err1, err2, err3)
+	err4 := c.orderManagementReader.Close()
+	return errors.Join(err1, err2, err3, err4)
 }
 
-// Run consumes all three topics until ctx is cancelled.
+// Run consumes all four topics until ctx is cancelled.
 func (c *Consumer) Run(ctx context.Context) error {
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 	go func() { errCh <- c.consumeLoop(ctx, c.workforceReader, c.handleWorkforceEvent) }()
 	go func() { errCh <- c.consumeLoop(ctx, c.inventoryReader, c.handleInventoryEvent) }()
 	go func() { errCh <- c.consumeLoop(ctx, c.fulfillmentReader, c.handleFulfillmentEvent) }()
+	go func() { errCh <- c.consumeLoop(ctx, c.orderManagementReader, c.handleOrderManagementEvent) }()
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		if err := <-errCh; err != nil {
 			return err
 		}
@@ -252,6 +287,76 @@ func (c *Consumer) handleFulfillmentEvent(ctx context.Context, env envelope.Enve
 
 	_, err = c.recordCompletion.Execute(ctx, usecases.RecordCompletionRequest{WorkUnitId: data.WorkUnitId})
 	return err
+}
+
+// handleOrderManagementEvent filters for OrderAllocated / OrderPartially-
+// Allocated — both event types share an identical payload shape and both
+// mean "these lines are ready to enqueue", so this handler does not
+// distinguish between them — and feeds each line in the payload into the
+// existing EnqueueWorkUnit use case. This is the event-choreography
+// replacement for order-management's former synchronous call to
+// POST /paths/{pathId}/work-units: order-management now publishes here
+// instead of calling this service's HTTP API directly.
+//
+// Idempotency mirrors handleFulfillmentEvent exactly: the event_id is
+// marked processed BEFORE any EnqueueWorkUnit call, so a redelivery of the
+// same OrderAllocated/OrderPartiallyAllocated message does not attempt to
+// re-enqueue its lines.
+func (c *Consumer) handleOrderManagementEvent(ctx context.Context, env envelope.Envelope) error {
+	if env.EventType != envelope.EventTypeOrderAllocated && env.EventType != envelope.EventTypeOrderPartiallyAllocated {
+		return nil
+	}
+
+	var data orderAllocatedData
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return err
+	}
+
+	alreadyProcessed, err := c.processed.TryMarkProcessed(ctx, env.EventId, env.OccurredAt)
+	if err != nil {
+		return err
+	}
+	if alreadyProcessed {
+		return nil
+	}
+
+	cpt := shared.NewCPT(data.PromiseDate)
+	for _, line := range data.Lines {
+		pathId, err := shared.NewPathId(line.PathId)
+		if err != nil {
+			return err
+		}
+
+		workUnitId := fmt.Sprintf("%s-line-%d", data.OrderId, line.LineNo)
+		_, err = c.enqueueWorkUnit.Execute(ctx, usecases.EnqueueWorkUnitRequest{
+			WorkUnitId: workUnitId,
+			PathId:     pathId,
+			CPT:        cpt,
+			Reference:  data.OrderId,
+			SKU:        line.SKU,
+			GiftWrap:   line.GiftWrap,
+		})
+		// release.ErrDuplicateEntry means WorkPool.Enqueue saw this
+		// WorkUnitId already present in the pool. The processed_events
+		// guard above already covers the common cause (redelivery of the
+		// exact same event_id), but a collision could in principle also
+		// arise some other way (e.g. a prior partial-allocation event for
+		// the same order/line reprocessed under a different event_id, or
+		// operator replay). Since the deterministic WorkUnitId means a
+		// duplicate can only ever refer to the SAME logical work unit,
+		// treating it as a benign no-op here (rather than a hard failure)
+		// is the safe, idempotent choice — it must never crash or stall
+		// the consumer for what is, by construction, the same unit of
+		// work already known to the pool.
+		if errors.Is(err, release.ErrDuplicateEntry) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // log emits a structured record through the configured logger, carrying the

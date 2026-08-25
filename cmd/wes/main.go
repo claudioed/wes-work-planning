@@ -123,11 +123,12 @@ func run() error {
 	}
 
 	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+	enqueueWorkUnit := usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock)
 
 	handlers := &inboundhttp.Handlers{
 		ReceiveChargeForecast: usecases.NewReceiveChargeForecast(charges, publisher, clock),
 		CommitShiftPlan:       usecases.NewCommitShiftPlan(plans, publisher, clock),
-		EnqueueWorkUnit:       usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock),
+		EnqueueWorkUnit:       enqueueWorkUnit,
 		ReleaseNextWork:       usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
 		RecordCompletion:      recordCompletion,
 		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
@@ -160,7 +161,7 @@ func run() error {
 		logger.Info("consuming integration events", "brokers", kafkaBrokers)
 		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
 		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
-		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, processedEvts, logger)
+		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, logger)
 		go func() {
 			if err := consumer.Run(consumerCtx); err != nil {
 				logger.Error("kafka consumer stopped", "error", err)
