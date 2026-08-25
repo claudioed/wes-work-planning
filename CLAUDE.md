@@ -53,6 +53,23 @@ migrations/                  golang-migrate SQL files
   (waveless). The release decision is a POLICY object, not a schedule.
 - **Flow balancing** — on telemetry (backlog vs plan): throttle upstream release
   or flag labor reassignment. Drum-Buffer-Rope with CPT as the drum.
+- **WorkUnit.SKU** — optional SKU carried by a WorkUnit (threaded from
+  `EnqueueWorkUnitRequest.SKU`), used ONLY to look up the SKU's
+  `ProductClassification` from `inventory-storage` once, at release time.
+- **Product classification propagation** — `ReleaseNextWork` reads a released
+  WorkUnit's SKU classification (via `ports.ProductClassificationLookup`,
+  a synchronous HTTP read mirroring inventory-storage's own facilitylayout
+  adapter pattern; permissive-by-default, `PRODUCT_CLASSIFICATION_MODE=http|permissive`)
+  and stamps derived `required_capabilities: ["hazmat"]` / `fragile: true`
+  onto the outbound `WorkReleased` event's `data` payload when applicable.
+  Both fields are OPTIONAL and OMITTED (not defaulted false/empty) when the
+  SKU is unclassified or the lookup is unavailable — fail-open, deliberately
+  asymmetric with inventory-storage's fail-closed `StowStock` check (ADR-0009).
+  `fulfillment-execution`'s Task carries these onward without ever calling
+  inventory-storage directly — the same "Task carries what a station needs
+  to know" design already used for CPT and requiredCapabilities.
+- **Known gap**: classification drift after release is not retroactively
+  applied — a WorkUnit stamps classification once, at release time.
 
 ## Aggregates & invariants (enforce in domain, unit-tested)
 
