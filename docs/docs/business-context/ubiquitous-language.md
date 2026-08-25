@@ -56,6 +56,7 @@ physical world violates several times a minute.
 | **UsableInventoryObserved** | Read-only projection, keyed by **SKU**, of usable quantity as Inventory last reported it. |
 | **SKU** (on `WorkUnit`) | Optional inventory SKU the work unit's order line corresponds to. Empty is valid — not every caller knows one. Exists solely so `ReleaseNextWork`'s outbound publisher can look up a `ProductClassificationView` once, at release time. |
 | **ProductClassificationView** | A plain, un-persisted read model — the result of a **synchronous** HTTP read from inventory-storage's `GET /products/{sku}/classification`, made once at release time. Not a Kafka projection (see the trap below). |
+| **GiftWrap** (on `WorkUnit`) | Optional, caller-stated at enqueue time: whether the requester asked the warehouse to produce a gift package for this work unit. **Not** a product attribute or `ProductClassification` tag — the same SKU may be gift-wrapped on one order and not another. Stamped directly onto `WorkReleased` as `gift_wrap`, read straight off the `WorkUnit`, never looked up from `inventory-storage`. See [ADR-0010](../adr/0010-gift-wrap-as-a-work-released-characteristic.md). |
 
 ## The traps
 
@@ -114,3 +115,22 @@ to consume. Instead, `ReleaseNextWork`'s outbound publisher calls
 `GET /products/{sku}/classification` **once**, at the moment a unit is
 released, and stamps the result onto that one `WorkReleased` event. See
 [ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md).
+
+### Trap 5 — `GiftWrap` is not a `ProductClassification` tag
+
+Both `gift_wrap` and `fragile` are optional booleans on the same
+`WorkReleased.data` payload, both omitted when false — it would be easy to
+assume they arrive the same way. They do not.
+
+`fragile` is **derived**: looked up from `inventory-storage`'s
+`ProductClassification` for the released unit's SKU, via the synchronous
+`ProductClassificationLookup` port (see Trap 4 above and
+[ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md)).
+It says something about the *product*.
+
+`gift_wrap` is **caller-supplied**: stated on `EnqueueWorkUnitRequest` at
+enqueue time and read straight off the `WorkUnit`, exactly like `cpt` or
+`reference`. It never touches `inventory-storage`, has no fail-open lookup
+concern, and says something about *this particular unit of work* — the same
+SKU can be gift-wrapped on one order and not on another. See
+[ADR-0010](../adr/0010-gift-wrap-as-a-work-released-characteristic.md).

@@ -161,6 +161,35 @@ func TestPostWorkUnit(t *testing.T) {
 	if loc := rec.Header().Get("Location"); loc != "/work-units/wu-1" {
 		t.Fatalf("got Location %q, want /work-units/wu-1", loc)
 	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, ok := resp["giftWrap"].(bool); !ok || got != false {
+		t.Fatalf("got giftWrap %v, want false when omitted from the request", resp["giftWrap"])
+	}
+}
+
+func TestPostWorkUnit_GiftWrapRequested_ReflectedInResponse(t *testing.T) {
+	router := newTestRouter()
+	body := map[string]any{
+		"workUnitId": "wu-gift-wrap",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-line-1",
+		"giftWrap":   true,
+	}
+
+	rec := doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("got status %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, ok := resp["giftWrap"].(bool); !ok || got != true {
+		t.Fatalf("got giftWrap %v, want true", resp["giftWrap"])
+	}
 }
 
 func TestPostWorkUnit_MalformedJSONReturns400(t *testing.T) {

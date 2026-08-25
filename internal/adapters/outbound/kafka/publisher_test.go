@@ -54,6 +54,15 @@ func (f *fakeClassificationLookup) GetClassification(_ context.Context, sku stri
 
 func newReleasedWorkUnit(t *testing.T, id, sku string) *memory.WorkUnitRepo {
 	t.Helper()
+	return newReleasedWorkUnitWithGiftWrap(t, id, sku, false)
+}
+
+// newReleasedWorkUnitWithGiftWrap is newReleasedWorkUnit plus an explicit
+// gift-wrap request, for tests that exercise the gift_wrap enrichment
+// (ADR-0010) independently of the SKU-derived classification hints
+// (ADR-0009).
+func newReleasedWorkUnitWithGiftWrap(t *testing.T, id, sku string, giftWrap bool) *memory.WorkUnitRepo {
+	t.Helper()
 	workUnits := memory.NewWorkUnitRepo()
 	pathId, err := shared.NewPathId("pick-a")
 	if err != nil {
@@ -65,6 +74,7 @@ func newReleasedWorkUnit(t *testing.T, id, sku string) *memory.WorkUnitRepo {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	unit.SetSKU(sku)
+	unit.SetGiftWrap(giftWrap)
 	if err := unit.Release(time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -265,5 +275,65 @@ func TestPublisher_WorkReleased_BaseFieldsStillPopulated(t *testing.T) {
 	data := decodeWorkReleasedData(t, writer.msgs[0])
 	if data["path_id"] != "pick-a" || data["work_unit_id"] != "wu-8" || data["ref"] != "ref-1" {
 		t.Fatalf("unexpected base fields: %v", data)
+	}
+}
+
+func TestPublisher_WorkReleased_GiftWrapRequested_SetsGiftWrapTrue(t *testing.T) {
+	workUnits := newReleasedWorkUnitWithGiftWrap(t, "wu-9", "", true)
+	writer := &fakeWriter{}
+	pub := outboundkafka.NewPublisherWithWriter(writer, workUnits, nil, func() string { return "evt-9" })
+
+	pathId, _ := shared.NewPathId("pick-a")
+	event := shared.NewWorkReleased("wu-9", pathId, time.Now())
+	if err := pub.Publish(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data := decodeWorkReleasedData(t, writer.msgs[0])
+	giftWrap, ok := data["gift_wrap"].(bool)
+	if !ok || !giftWrap {
+		t.Fatalf("expected gift_wrap=true, got %v", data)
+	}
+}
+
+func TestPublisher_WorkReleased_GiftWrapNotRequested_OmitsGiftWrapField(t *testing.T) {
+	workUnits := newReleasedWorkUnitWithGiftWrap(t, "wu-10", "", false)
+	writer := &fakeWriter{}
+	pub := outboundkafka.NewPublisherWithWriter(writer, workUnits, nil, func() string { return "evt-10" })
+
+	pathId, _ := shared.NewPathId("pick-a")
+	event := shared.NewWorkReleased("wu-10", pathId, time.Now())
+	if err := pub.Publish(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data := decodeWorkReleasedData(t, writer.msgs[0])
+	if _, ok := data["gift_wrap"]; ok {
+		t.Fatalf("did not expect gift_wrap field when not requested, got %v", data)
+	}
+}
+
+func TestPublisher_WorkReleased_GiftWrapAndFragileAreIndependent(t *testing.T) {
+	workUnits := newReleasedWorkUnitWithGiftWrap(t, "wu-11", "sku-fragile", true)
+	lookup := &fakeClassificationLookup{views: map[string]productclassificationview.ProductClassificationView{
+		"sku-fragile": {SKU: "sku-fragile", HandlingTags: []string{"Fragile"}, Known: true},
+	}}
+	writer := &fakeWriter{}
+	pub := outboundkafka.NewPublisherWithWriter(writer, workUnits, lookup, func() string { return "evt-11" })
+
+	pathId, _ := shared.NewPathId("pick-a")
+	event := shared.NewWorkReleased("wu-11", pathId, time.Now())
+	if err := pub.Publish(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data := decodeWorkReleasedData(t, writer.msgs[0])
+	giftWrap, ok := data["gift_wrap"].(bool)
+	if !ok || !giftWrap {
+		t.Fatalf("expected gift_wrap=true (caller-supplied), got %v", data)
+	}
+	fragile, ok := data["fragile"].(bool)
+	if !ok || !fragile {
+		t.Fatalf("expected fragile=true (SKU-derived), got %v", data)
 	}
 }

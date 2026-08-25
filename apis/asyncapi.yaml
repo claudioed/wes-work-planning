@@ -613,9 +613,10 @@ components:
               description: >-
                 Payload published by the outbound Kafka adapter, enriched
                 from the WorkUnit repository with the unit's CPT and
-                reference, and — when the released unit carries a known SKU
-                — with derived hazmat-capability/fragile hints read once,
-                synchronously, from inventory-storage's product
+                reference, the caller-stated gift-wrap request when one was
+                made (see ADR-0010), and — when the released unit carries a
+                known SKU — with derived hazmat-capability/fragile hints
+                read once, synchronously, from inventory-storage's product
                 classification at publish time (see ADR-0009).
               required:
                 - path_id
@@ -667,6 +668,20 @@ components:
                     unknown, or the lookup is unavailable. Consumers must
                     treat an absent field identically to `false`. See
                     ADR-0009.
+                  example: true
+                gift_wrap:
+                  type: boolean
+                  description: >-
+                    OPTIONAL. Present and `true` only when the requester
+                    asked the warehouse to produce a gift package for this
+                    work unit, stated at enqueue time. This is a
+                    caller-supplied `WorkReleased` characteristic, not a
+                    derived product-classification hint — unlike
+                    `required_capabilities`/`fragile`, it is read straight
+                    off the `WorkUnit` and never looked up from
+                    inventory-storage (see ADR-0010). Absent — not `false`
+                    — when gift wrap was not requested. Consumers must
+                    treat an absent field identically to `false`.
                   example: true
 
     WorkUnitCompletedEvent:

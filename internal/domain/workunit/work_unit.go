@@ -36,6 +36,7 @@ type WorkUnit struct {
 	cpt         shared.CPT
 	reference   string
 	sku         string
+	giftWrap    bool
 	state       State
 	releasedAt  *time.Time
 	completedAt *time.Time
@@ -74,6 +75,21 @@ func (w *WorkUnit) SKU() string { return w.sku }
 // rather than a NewWorkUnit parameter, keeps every existing caller and test
 // fixture compiling unchanged — SKU is additive, not a new invariant.
 func (w *WorkUnit) SetSKU(sku string) { w.sku = sku }
+
+// GiftWrap is an optional, caller-stated characteristic of this work unit:
+// the requester asked the warehouse to produce a gift package for it,
+// declared at enqueue time (see ADR-0010). Unlike SKU/ProductClassification
+// (ADR-0009), this is never looked up from another service — it is exactly
+// what the caller supplied on EnqueueWorkUnitRequest, read once here so the
+// outbound WorkReleased publisher can stamp it onto the published event at
+// release time. False by default when the caller did not request it.
+func (w *WorkUnit) GiftWrap() bool { return w.giftWrap }
+
+// SetGiftWrap records the optional gift-wrap request after construction. A
+// separate setter, rather than a NewWorkUnit parameter, keeps every
+// existing caller and test fixture compiling unchanged — GiftWrap is
+// additive, not a new invariant.
+func (w *WorkUnit) SetGiftWrap(giftWrap bool) { w.giftWrap = giftWrap }
 
 // Release admits the unit into active work. A unit may be assigned/released
 // at most once — releasing an already-released or completed unit fails.
