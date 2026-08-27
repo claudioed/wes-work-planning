@@ -115,9 +115,19 @@ func run() error {
 			return fmt.Errorf("EVENT_PUBLISHER=kafka requires KAFKA_BROKERS to be set")
 		}
 		logger.Info("event publisher configured", "publisher", "kafka", "brokers", kafkaBrokers)
-		kafkaPublisher := outboundkafka.NewPublisher(brokerList(kafkaBrokers), workUnits, classifications, newEventID)
-		defer func() { _ = kafkaPublisher.Close() }()
-		publisher = kafkaPublisher
+		brokers := brokerList(kafkaBrokers)
+		// The integration publisher (warehouse.work-planning.events) is
+		// untouched. Alongside it, a SEPARATE analytics publisher fans every
+		// domain event onto the dedicated analytics topic
+		// (warehouse.wes.analytics) that feeds the "Release Throughput &
+		// Backlog Health" data product. A MultiPublisher emits each event to
+		// BOTH, exactly once each, without either publisher knowing about the
+		// other (ADR-0011).
+		integrationPublisher := outboundkafka.NewPublisher(brokers, workUnits, classifications, newEventID)
+		defer func() { _ = integrationPublisher.Close() }()
+		analyticsPublisher := outboundkafka.NewAnalyticsPublisher(brokers, newEventID)
+		defer func() { _ = analyticsPublisher.Close() }()
+		publisher = events.NewMultiPublisher(integrationPublisher, analyticsPublisher)
 	default:
 		publisher = events.NewLogPublisher(logger)
 	}
