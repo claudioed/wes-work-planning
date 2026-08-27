@@ -26,16 +26,19 @@ const Source = "wes-work-planning"
 
 // Topics this service publishes to / consumes from.
 const (
-	TopicWorkPlanningEvents = "warehouse.work-planning.events"
-	TopicWorkforceEvents    = "warehouse.workforce.events"
-	TopicInventoryEvents    = "warehouse.inventory.events"
-	TopicFulfillmentEvents  = "warehouse.fulfillment.events"
+	TopicWorkPlanningEvents    = "warehouse.work-planning.events"
+	TopicWorkforceEvents       = "warehouse.workforce.events"
+	TopicInventoryEvents       = "warehouse.inventory.events"
+	TopicFulfillmentEvents     = "warehouse.fulfillment.events"
+	TopicOrderManagementEvents = "warehouse.order-management.events"
 )
 
 // Event types this service consumes.
 const (
-	EventTypeShiftPlanCommitted = "ShiftPlanCommitted"
-	EventTypeStockReserved      = "StockReserved"
-	EventTypeReservationRevoked = "ReservationRevoked"
-	EventTypeTaskCompleted      = "TaskCompleted"
+	EventTypeShiftPlanCommitted      = "ShiftPlanCommitted"
+	EventTypeStockReserved           = "StockReserved"
+	EventTypeReservationRevoked      = "ReservationRevoked"
+	EventTypeTaskCompleted           = "TaskCompleted"
+	EventTypeOrderAllocated          = "OrderAllocated"
+	EventTypeOrderPartiallyAllocated = "OrderPartiallyAllocated"
 )

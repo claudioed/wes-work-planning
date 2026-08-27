@@ -61,6 +61,7 @@ func toWorkUnitResponseDTO(unit *workunit.WorkUnit) workUnitResponseDTO {
 		CPT:       unit.CPT().Time(),
 		Reference: unit.Reference(),
 		State:     unit.State().String(),
+		GiftWrap:  unit.GiftWrap(),
 	}
 }
 
@@ -177,6 +178,8 @@ func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
 		PathId:     pathId,
 		CPT:        shared.NewCPT(body.CPT),
 		Reference:  body.Reference,
+		SKU:        body.SKU,
+		GiftWrap:   body.GiftWrap,
 	})
 	if err != nil {
 		writeError(w, r, err)

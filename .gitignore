@@ -1,3 +1,10 @@
 bin/
 .env
 coverage.out
+
+# Root-level built binaries (never commit compiled artifacts).
+/wes-work-planning
+/wes
+/wes-projector
+/wes-reports
+/mcp

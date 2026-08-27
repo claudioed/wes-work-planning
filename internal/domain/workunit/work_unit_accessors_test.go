@@ -85,3 +85,34 @@ func TestWorkUnit_ReleasedAtAndCompletedAt_Lifecycle(t *testing.T) {
 		t.Fatalf("got ReleasedAt %v, want %v (unchanged after completion)", got, releaseTime)
 	}
 }
+
+func TestWorkUnit_SKU_DefaultsEmptyAndIsSettable(t *testing.T) {
+	w := mustWorkUnit(t)
+
+	if got := w.SKU(); got != "" {
+		t.Fatalf("got SKU %q, want empty by default", got)
+	}
+
+	w.SetSKU("sku-482910")
+	if got := w.SKU(); got != "sku-482910" {
+		t.Fatalf("got SKU %q, want sku-482910", got)
+	}
+}
+
+func TestWorkUnit_GiftWrap_DefaultsFalseAndIsSettable(t *testing.T) {
+	w := mustWorkUnit(t)
+
+	if got := w.GiftWrap(); got != false {
+		t.Fatalf("got GiftWrap %v, want false by default", got)
+	}
+
+	w.SetGiftWrap(true)
+	if got := w.GiftWrap(); got != true {
+		t.Fatalf("got GiftWrap %v, want true", got)
+	}
+
+	w.SetGiftWrap(false)
+	if got := w.GiftWrap(); got != false {
+		t.Fatalf("got GiftWrap %v, want false after unsetting", got)
+	}
+}

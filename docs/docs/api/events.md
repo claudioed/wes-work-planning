@@ -133,6 +133,12 @@ adapter with `cpt` and `ref` (read from the `WorkUnit` repository) so the
 downstream consumer never has to call back; the domain event itself carries
 only the two identifiers.
 
+`WorkReleased.data` also carries two OPTIONAL fields, present only when
+there is a hint to give: `required_capabilities` (array, containing
+`"hazmat"` when the released unit's SKU is classified `Hazmat` in
+inventory-storage) and `fragile` (bool, `true` when the SKU is classified
+`Fragile`). See "Product classification propagation" below.
+
 Publication is opt-in at runtime: with the default `EVENT_PUBLISHER=log` these
 events are written to the log publisher instead of Kafka. Set
 `EVENT_PUBLISHER=kafka` and `KAFKA_BROKERS` to publish.
@@ -173,6 +179,63 @@ Keyed by SKU, not by path — Inventory reservations are SKU-scoped.
 This closes the control loop's feedback edge. No new use case was introduced —
 the inbound adapter calls exactly the same code path that
 `POST /work-units/{id}/complete` does.
+
+## Product classification propagation (Task 9, synchronous HTTP)
+
+`inventory-storage` owns SKU-level `ProductClassification` master data
+(`Hazmat`/`Fragile`/`TemperatureSensitive`/`Oversized`/`HighValue` tags),
+exposed synchronously at `GET /products/{sku}/classification`. Downstream,
+`fulfillment-execution`'s `Task` benefits from knowing hazmat-capability and
+fragile handling **at claim time**, without a live per-task callback into
+inventory-storage.
+
+**Integration mechanism: synchronous outbound HTTP read, not a Kafka
+projection.** This was a deliberate finding, not a default: inventory-storage
+publishes `ProductClassified` in its domain-event catalogue, but its own
+outbound Kafka publisher (`internal/adapters/outbound/kafka/publisher.go`
+there) explicitly forwards only `StockReserved` and `ReservationRevoked` to
+the broker — see that file's package doc comment and
+`apis/asyncapi.yaml`'s "Full catalog vs. actually published" note.
+`ProductClassified` is not part of the published integration contract, so
+there is nothing to consume; building a Kafka projector against it would be
+building a consumer for an event that never reaches the broker. See
+[ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md)
+for the full reasoning.
+
+- New outbound adapter package `internal/adapters/outbound/productclassification/`
+  implementing a new port `ports.ProductClassificationLookup`
+  (`GetClassification(ctx, sku) (productclassificationview.ProductClassificationView, error)`):
+  a plain `net/http` client (`Client`, mirrors inventory-storage's own
+  `facilitylayout.Client` HTTP-adapter pattern) calling
+  `GET {INVENTORY_STORAGE_BASE_URL}/products/{sku}/classification`, and a
+  `PermissiveLookup` no-op that always reports `Known=false`. Selected via
+  `PRODUCT_CLASSIFICATION_MODE=http|permissive` (default `permissive`, so
+  existing tests/CI/deployments are unaffected).
+- New read model `internal/domain/productclassificationview/` —
+  `ProductClassificationView{SKU, HandlingTags, TemperatureClass, Known}` — a
+  plain value, not persisted, not an aggregate.
+- `WorkUnit` gains an optional `SKU` field (`SetSKU`/`SKU()`), threaded
+  through from `EnqueueWorkUnitRequest.SKU` (new optional field, empty by
+  default so no existing caller breaks).
+- `ReleaseNextWork`'s outbound Kafka publisher
+  (`internal/adapters/outbound/kafka/publisher.go`) looks up the released
+  unit's SKU classification **once**, at publish time, and stamps two new
+  OPTIONAL `WorkReleased.data` fields: `required_capabilities` (array,
+  appends `"hazmat"` when the SKU carries the `Hazmat` tag) and `fragile`
+  (bool, `true` when the SKU carries the `Fragile` tag). Both fields are
+  **omitted** — not defaulted to an explicit empty array / `false` — when
+  the SKU is unclassified, has no SKU at all, or the lookup is unavailable
+  (permissive mode or a lookup error): this is strictly additive and
+  backward compatible with `fulfillment-execution`'s existing `WorkReleased`
+  consumer, which the sibling repo's parallel PR extends to read these same
+  optional fields, defaulting to `false`/empty when absent.
+- **Fail-open, not fail-closed.** Unlike inventory-storage's own
+  `StowStock` placement check (which blocks a stow when a Hazmat/
+  TemperatureSensitive SKU's lookup is unavailable), a classification-lookup
+  problem here must never block or delay releasing work — it can only omit
+  an optional enrichment. Documented as a known gap in ADR-0009's
+  Consequences, in the same spirit as inventory-storage's ADR-0003 "no
+  expiry sweeper" gap.
 
 ## Idempotency
 

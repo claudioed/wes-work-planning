@@ -69,6 +69,7 @@ autoscaling:
 config:
   httpAddr: ":8080"
   eventPublisher: "log"   # "log" or "kafka"
+  logLevel: "info"        # debug | info | warn | error
 
 database:
   # Plaintext URL (fine for local/dev clusters). Prefer existingSecret for
@@ -82,6 +83,20 @@ database:
 kafka:
   enabled: false
   brokers: "kafka:9092"
+
+# Deployment environment, exported as the deployment.environment.name OTel
+# resource attribute (and available to anything else that wants it).
+environment: "local"
+
+# OpenTelemetry. The service pushes traces and metrics over OTLP/gRPC to the
+# Collector at otel.endpoint; if nothing is listening there, telemetry is
+# dropped and the service runs normally. Set otel.enabled=false to leave the
+# env vars off entirely and fall back to the in-binary defaults. The endpoint
+# accepts both the OTLP-spec URL form below and a bare "host:port".
+otel:
+  enabled: true
+  endpoint: "http://otel-collector.observability.svc.cluster.local:4317"
+  serviceName: "wes-work-planning"
 
 # Extra environment variables appended verbatim (name/value or name/valueFrom).
 extraEnv: []
@@ -103,3 +118,48 @@ readinessProbe:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# --- analytics data product (ADR-0011) ---
+# The per-service "Release Throughput & Backlog Health" report: a separate
+# analytics topic, a writer (projector) and a read-only reader (reports),
+# backed by a separate analytical database. Disabled by default so existing
+# releases are unaffected; set analytics.enabled=true to deploy the two extra
+# processes.
+analytics:
+  enabled: false
+  # Directory (inside the image) of the analytical *.up.sql migrations the
+  # projector applies on start.
+  migrationsPath: "migrations/analytics"
+  database:
+    # The projector's read-write analytical DSN.
+    projectorUrl: ""
+    # The reader's DSN — a read-only role where possible; falls back to the
+    # projector DSN when empty (local/dev).
+    reportsUrl: ""
+    # Name of an existing Secret with ANALYTICS_DATABASE_URL and
+    # ANALYTICS_READER_DATABASE_URL keys. Takes precedence over the URLs above.
+    existingSecret: ""
+  projector:
+    replicaCount: 1
+    adminAddr: ":8091"
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+  reports:
+    replicaCount: 1
+    httpAddr: ":8092"
+    service:
+      type: ClusterIP
+      port: 80
+      targetPort: 8092
+    resources:
+      limits:
+        cpu: 500m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi

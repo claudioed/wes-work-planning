@@ -132,3 +132,147 @@ func TestHandleFulfillmentEvent_RedeliveryDoesNotInvokeRecordCompletionAgain(t *
 		t.Fatalf("expected work unit to be Completed, got %v", unit.State())
 	}
 }
+
+// orderManagementFixture wires just enough of the real stack (in-memory
+// repos, the existing EnqueueWorkUnit use case) to exercise
+// handleOrderManagementEvent without touching a broker.
+type orderManagementFixture struct {
+	workUnits *memory.WorkUnitRepo
+	pools     *memory.WorkPoolRepo
+	processed *memory.ProcessedEventRepo
+	consumer  *Consumer
+}
+
+func newOrderManagementFixture() orderManagementFixture {
+	workUnits := memory.NewWorkUnitRepo()
+	pools := memory.NewWorkPoolRepo()
+	publisher := events.NewLogPublisher(nil)
+	clock := memory.FixedClock{At: time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)}
+	processed := memory.NewProcessedEventRepo()
+
+	enqueueWorkUnit := usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock)
+
+	return orderManagementFixture{
+		workUnits: workUnits,
+		pools:     pools,
+		processed: processed,
+		consumer: &Consumer{
+			enqueueWorkUnit: enqueueWorkUnit,
+			processed:       processed,
+		},
+	}
+}
+
+func orderAllocatedEnvelope(t *testing.T, eventId, eventType, orderId string, lines []orderLineData) envelope.Envelope {
+	t.Helper()
+	data, err := json.Marshal(orderAllocatedData{
+		OrderId:     orderId,
+		PromiseDate: time.Date(2026, 8, 21, 23, 0, 0, 0, time.UTC),
+		Lines:       lines,
+	})
+	if err != nil {
+		t.Fatalf("marshal data: %v", err)
+	}
+	return envelope.Envelope{
+		EventId:    eventId,
+		EventType:  eventType,
+		OccurredAt: time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC),
+		Source:     "order-management",
+		Data:       data,
+	}
+}
+
+func TestHandleOrderManagementEvent_EnqueuesOneWorkUnitPerLine(t *testing.T) {
+	f := newOrderManagementFixture()
+	lines := []orderLineData{
+		{LineNo: 1, SKU: "SKU-1", PathId: "pick-a", GiftWrap: false},
+		{LineNo: 2, SKU: "SKU-2", PathId: "pick-a", GiftWrap: true},
+	}
+	env := orderAllocatedEnvelope(t, "evt-order-1", envelope.EventTypeOrderAllocated, "order-1", lines)
+
+	if err := f.consumer.handleOrderManagementEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleOrderManagementEvent: %v", err)
+	}
+
+	unit1, err := f.workUnits.FindById(context.Background(), "order-1-line-1")
+	if err != nil {
+		t.Fatalf("FindById line 1: %v", err)
+	}
+	if unit1.SKU() != "SKU-1" || unit1.GiftWrap() {
+		t.Fatalf("unexpected unit1: sku=%v giftWrap=%v", unit1.SKU(), unit1.GiftWrap())
+	}
+
+	unit2, err := f.workUnits.FindById(context.Background(), "order-1-line-2")
+	if err != nil {
+		t.Fatalf("FindById line 2: %v", err)
+	}
+	if unit2.SKU() != "SKU-2" || !unit2.GiftWrap() {
+		t.Fatalf("unexpected unit2: sku=%v giftWrap=%v", unit2.SKU(), unit2.GiftWrap())
+	}
+}
+
+func TestHandleOrderManagementEvent_PartiallyAllocatedBehavesIdentically(t *testing.T) {
+	f := newOrderManagementFixture()
+	lines := []orderLineData{{LineNo: 1, SKU: "SKU-9", PathId: "pick-a", GiftWrap: false}}
+	env := orderAllocatedEnvelope(t, "evt-order-partial", envelope.EventTypeOrderPartiallyAllocated, "order-9", lines)
+
+	if err := f.consumer.handleOrderManagementEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleOrderManagementEvent: %v", err)
+	}
+
+	unit, err := f.workUnits.FindById(context.Background(), "order-9-line-1")
+	if err != nil {
+		t.Fatalf("FindById: %v", err)
+	}
+	if unit.SKU() != "SKU-9" {
+		t.Fatalf("unexpected sku: %v", unit.SKU())
+	}
+}
+
+func TestHandleOrderManagementEvent_IgnoresOtherEventTypes(t *testing.T) {
+	f := newOrderManagementFixture()
+	lines := []orderLineData{{LineNo: 1, SKU: "SKU-1", PathId: "pick-a"}}
+	env := orderAllocatedEnvelope(t, "evt-order-other", "SomethingElse", "order-1", lines)
+
+	if err := f.consumer.handleOrderManagementEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleOrderManagementEvent: %v", err)
+	}
+
+	if _, err := f.workUnits.FindById(context.Background(), "order-1-line-1"); err == nil {
+		t.Fatalf("expected no work unit to be enqueued for an unknown event type")
+	}
+}
+
+func TestHandleOrderManagementEvent_RedeliveryDoesNotEnqueueAgain(t *testing.T) {
+	f := newOrderManagementFixture()
+	lines := []orderLineData{{LineNo: 1, SKU: "SKU-1", PathId: "pick-a"}}
+	env := orderAllocatedEnvelope(t, "evt-order-dup", envelope.EventTypeOrderAllocated, "order-1", lines)
+
+	if err := f.consumer.handleOrderManagementEvent(context.Background(), env); err != nil {
+		t.Fatalf("first handleOrderManagementEvent: %v", err)
+	}
+	// Redelivery of the same event_id must not call EnqueueWorkUnit again;
+	// the processed_events idempotency check must short-circuit before any
+	// enqueue attempt, so a genuine release.ErrDuplicateEntry from the pool
+	// is never even reached on the common redelivery path.
+	if err := f.consumer.handleOrderManagementEvent(context.Background(), env); err != nil {
+		t.Fatalf("redelivered handleOrderManagementEvent: %v", err)
+	}
+
+	pool, err := f.pools.FindByPathId(context.Background(), mustPathId(t, "pick-a"))
+	if err != nil {
+		t.Fatalf("FindByPathId: %v", err)
+	}
+	if got := pool.BacklogDepth(); got != 1 {
+		t.Fatalf("expected exactly one pending entry after redelivery, got %d", got)
+	}
+}
+
+func mustPathId(t *testing.T, value string) shared.PathId {
+	t.Helper()
+	pathId, err := shared.NewPathId(value)
+	if err != nil {
+		t.Fatalf("NewPathId: %v", err)
+	}
+	return pathId
+}

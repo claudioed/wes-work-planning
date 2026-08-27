@@ -74,6 +74,63 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
 | `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published         |
 | `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
+| `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
+| `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
+
+## Analytics data product (Release Throughput & Backlog Health)
+
+Alongside the OLTP service, this repo owns a per-service **analytical data
+product** built entirely from its own domain events — a lightweight data mesh
+with no central data platform. See
+[ADR-0011](./docs/docs/adr/0011-analytical-data-product.md) and the
+[report contract](./docs/docs/analytics/release-throughput-report.md).
+
+Three processes, one writer:
+
+- `cmd/wes` — OLTP (unchanged). With `EVENT_PUBLISHER=kafka` it fans every
+  domain event to both the integration topic (`warehouse.work-planning.events`)
+  and the separate analytics topic (`warehouse.wes.analytics`).
+- `cmd/wes-projector` — the **only** writer of the analytical database. Consumes
+  `warehouse.wes.analytics` (from the earliest offset), applies idempotent
+  projections, and runs the analytical migrations on start.
+- `cmd/wes-reports` — read-only reader. Serves `GET /reports/throughput` and
+  `GET /reports/throughput/freshness` over a read-only pool.
+
+```sh
+docker compose up -d   # Kafka + Postgres
+
+# Create a separate analytical database (baseline: same Postgres release), then:
+export ANALYTICS_DATABASE_URL="postgres://wes:***@localhost:5432/wes_analytics?sslmode=disable"
+export KAFKA_BROKERS="localhost:9092"
+
+# 1) OLTP service, publishing to both topics
+EVENT_PUBLISHER=kafka DATABASE_URL="postgres://wes:***@localhost:5432/wes?sslmode=disable" \
+  go run ./cmd/wes
+
+# 2) The writer: consumes the analytics topic, migrates + projects (admin :8091)
+go run ./cmd/wes-projector
+
+# 3) The reader: serves the report read-only (:8092)
+go run ./cmd/wes-reports
+
+# Query it
+curl "localhost:8092/reports/throughput?from=2026-01-01T00:00:00Z&to=2027-01-01T00:00:00Z"
+curl "localhost:8092/reports/throughput/freshness"
+```
+
+The MCP server (`cmd/mcp`) exposes the read-only `get_release_throughput_report`
+tool when `REPORTS_BASE_URL` (e.g. `http://localhost:8092`) is set; it calls the
+reports REST rather than opening the analytical database.
+
+### Analytics config
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `ANALYTICS_DATABASE_URL` | (unset) | Analytical DB DSN. Required by `cmd/wes-projector` (read-write) and `cmd/wes-reports` (read-only role recommended). |
+| `ANALYTICS_MIGRATIONS_PATH` | `migrations/analytics` | Directory of analytical `*.up.sql` migrations the projector applies on start. |
+| `ADMIN_ADDR` | `:8091` | `cmd/wes-projector` health endpoint address. |
+| `HTTP_ADDR` (reports) | `:8092` | `cmd/wes-reports` REST address. |
+| `REPORTS_BASE_URL` | (unset) | When set on `cmd/mcp`, enables the `get_release_throughput_report` MCP tool pointed at the reports REST. |
 
 ## API
 
@@ -292,6 +349,15 @@ Topic `warehouse.work-planning.events`:
   `data`: `{"path_id","work_unit_id","cpt","ref"}`. Consumed downstream by
   fulfillment-execution, which turns it into a Task.
 
+  Additive: `data` also carries two OPTIONAL fields when there is a hint to
+  give — `required_capabilities` (array, containing `"hazmat"` when the
+  released unit's SKU is classified `Hazmat` in inventory-storage) and
+  `fragile` (bool, `true` when the SKU is classified `Fragile`). Looked up
+  once, synchronously, from inventory-storage's
+  `GET /products/{sku}/classification` at publish time — see
+  [ADR-0009](./docs/docs/adr/0009-product-classification-propagation-to-work-released.md).
+  Both fields are omitted, not defaulted to empty/false, when unavailable.
+
 Set `EVENT_PUBLISHER=kafka` (and `KAFKA_BROKERS`) to publish here instead of
 the default `log` publisher; `internal/adapters/outbound/kafka` implements the
 same `ports.EventPublisher` interface the log publisher does.
@@ -316,6 +382,19 @@ same `ports.EventPublisher` interface the log publisher does.
   case (`RecordCompletionRequest.WorkUnitId`), transitioning that work unit
   from Released to Completed exactly as `POST /work-units/{id}/complete`
   would. No new use case — this is additive wiring only.
+- Topic `warehouse.order-management.events`, event types `OrderAllocated` and
+  `OrderPartiallyAllocated` — `data` (identical shape for both):
+  `{"order_id","promise_date","lines":[{"line_no","sku","path_id","gift_wrap"}]}`.
+  Replaces order-management's former synchronous call to
+  `POST /paths/{pathId}/work-units` with event choreography: order-management
+  publishes here once it has allocated stock and locally marked an order line
+  Released. For each line, `data.order_id`/`line.line_no` derive a
+  deterministic `work_unit_id` (`"{order_id}-line-{line_no}"`), and the
+  existing `EnqueueWorkUnit` use case is called directly — no new use case.
+  Deliberately fire-and-forget: there is no reply event back to
+  order-management; the existing `WorkUnitCreated`/`WorkReleased` events on
+  `warehouse.work-planning.events` remain the only observable signal of
+  downstream progress, same as for every other `EnqueueWorkUnit` caller.
 
 Setting `KAFKA_BROKERS` starts this consumer automatically, independent of
 `EVENT_PUBLISHER`.
@@ -367,6 +446,91 @@ EOF
 curl localhost:8080/paths/pick-a/telemetry
 # work unit wu-1 is now Completed
 ```
+
+## Observability
+
+The service is instrumented with OpenTelemetry: traces and metrics are pushed
+over **OTLP/gRPC** to a Collector, and logs are structured JSON on `log/slog`
+carrying the active span's `trace_id`/`span_id`.
+
+### Environment
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`, case-insensitive. JSON to stdout. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | Collector's OTLP/gRPC receiver. Accepts the spec URL form (`http://host:4317`) or bare `host:port`. |
+| `OTEL_SERVICE_NAME` | `wes-work-planning` | `service.name` resource attribute. |
+| `SERVICE_VERSION` | `dev` | `service.version` resource attribute. |
+| `ENVIRONMENT` | `local` | `deployment.environment.name` resource attribute. |
+
+A Collector is *expected* at `OTEL_EXPORTER_OTLP_ENDPOINT` but never
+*required*: the OTLP exporters dial lazily, so with nothing listening the
+telemetry is silently dropped and the service starts and serves normally. In
+the `warehouse-infra` kind cluster the Helm chart points this at the
+in-cluster Collector Service (`charts/wes-work-planning/values.yaml`, the
+`otel` block).
+
+### What gets exported
+
+**Traces**
+
+- One server span per HTTP request (`github.com/riandyrn/otelchi`), named
+  after the chi **route pattern** (`/paths/{pathId}/release`) rather than the
+  raw path, so span names stay low-cardinality.
+- A child span per database call (`github.com/exaring/otelpgx` as the pgx v5
+  pool tracer), carrying the normalized SQL — parameter placeholders, never
+  literal values.
+- `kafka.publish <topic>` on the producer side and `kafka.consume <topic>` on
+  the consumer side, per the OTel messaging semantic conventions. Trace
+  context crosses the broker in the message's `traceparent` header
+  (`internal/adapters/kafka/otelkafka`), so a `WorkReleased` published here
+  and consumed by `fulfillment-execution` is one distributed trace — and a
+  `ShiftPlanCommitted` published by `workforce-management` continues its
+  trace into this service's projector.
+
+**Metrics**
+
+- `http.server.request.duration` (histogram, seconds) and
+  `http.server.active_requests`, from otelchi's metric middleware.
+- `wes.work_units.released` — the business metric: a counter incremented in
+  the `ReleaseNextWork` use case (not in the HTTP handler, so it tracks the
+  real domain event), attributed by `path_id`.
+- Go runtime metrics — goroutines, GC, memory —
+  (`go.opentelemetry.io/contrib/instrumentation/runtime`).
+
+**Logs**
+
+Every record is JSON on stdout. Records emitted while a span is active carry
+that span's IDs, so logs join traces:
+
+```json
+{"time":"...","level":"INFO","msg":"http request","method":"POST","route":"/paths/{pathId}/release","status":200,"trace_id":"21da85e3a34ce1fabc425b63dfb148c6","span_id":"3af54929e6a0094c"}
+```
+
+The OTel SDK's own diagnostics are bridged onto the same logger at `debug`,
+so nothing escapes as plain text.
+
+### Smoke-testing trace propagation
+
+With the shared broker running, publish a `WorkReleased` by releasing work,
+then read the message back and compare its `traceparent` with the `trace_id`
+of the request that produced it:
+
+```sh
+KAFKA_BROKERS=localhost:9092 EVENT_PUBLISHER=kafka LOG_LEVEL=info go run ./cmd/wes
+
+curl -X POST localhost:8080/paths/pick-a/work-units \
+  -H 'Content-Type: application/json' \
+  -d '{"workUnitId":"wu-1","cpt":"2026-08-23T23:00:00Z","reference":"order-1"}'
+curl -X POST localhost:8080/paths/pick-a/release
+
+kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic warehouse.work-planning.events --property print.headers=true --from-beginning
+```
+
+The reverse direction works the same way: publish a `ShiftPlanCommitted` with
+a `traceparent` header onto `warehouse.workforce.events` and the projector's
+log line comes out carrying that same `trace_id`.
 
 ## Invariants
 

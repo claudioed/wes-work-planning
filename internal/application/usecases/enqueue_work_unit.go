@@ -34,6 +34,21 @@ type EnqueueWorkUnitRequest struct {
 	PathId     shared.PathId
 	CPT        shared.CPT
 	Reference  string
+	// SKU is optional: the inventory SKU this order line corresponds to,
+	// if known. Threaded through to the WorkUnit so the outbound
+	// WorkReleased publisher can look up its ProductClassification once,
+	// at release time, and stamp derived hazmat/fragile hints onto the
+	// published event (see ADR-0009). Empty is a valid value — not every
+	// caller knows a SKU.
+	SKU string
+	// GiftWrap is optional: whether the requester asked the warehouse to
+	// produce a gift package for this work unit, stated at enqueue time.
+	// Threaded through to the WorkUnit so the outbound WorkReleased
+	// publisher can stamp it directly onto the published event's data
+	// payload (see ADR-0010) — unlike SKU, this is never looked up from
+	// another service; it is exactly what the caller supplied. False by
+	// default — not every caller requests gift wrap.
+	GiftWrap bool
 }
 
 func (uc *EnqueueWorkUnit) Execute(ctx context.Context, req EnqueueWorkUnitRequest) (*workunit.WorkUnit, error) {
@@ -41,6 +56,8 @@ func (uc *EnqueueWorkUnit) Execute(ctx context.Context, req EnqueueWorkUnitReque
 	if err != nil {
 		return nil, err
 	}
+	unit.SetSKU(req.SKU)
+	unit.SetGiftWrap(req.GiftWrap)
 
 	pool, err := uc.pools.FindByPathId(ctx, req.PathId)
 	if errors.Is(err, ports.ErrNotFound) {

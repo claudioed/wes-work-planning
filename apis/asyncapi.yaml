@@ -75,10 +75,16 @@ info:
     ShiftPlan aggregate, which is a different model that happens to share the
     name), `StockReserved` and `ReservationRevoked` from inventory-storage on
     `warehouse.inventory.events` (projected into the SKU-keyed
-    `UsableInventoryObserved` view), and `TaskCompleted` from
+    `UsableInventoryObserved` view), `TaskCompleted` from
     fulfillment-execution on `warehouse.fulfillment.events` (fed into the
-    `RecordCompletion` use case to close the execution feedback loop). All
-    consumer paths are idempotent under at-least-once redelivery.
+    `RecordCompletion` use case to close the execution feedback loop), and
+    `OrderAllocated`/`OrderPartiallyAllocated` from order-management on
+    `warehouse.order-management.events` (fed into the existing
+    `EnqueueWorkUnit` use case, once per order line — the event-choreography
+    replacement for order-management's former synchronous call to
+    `POST /paths/{pathId}/work-units`; deliberately fire-and-forget, with no
+    reply event published back). All consumer paths are idempotent under
+    at-least-once redelivery.
   contact:
     name: WES Work Planning Team
     url: https://warehouse-systems.internal/teams/wes-work-planning
@@ -257,7 +263,13 @@ components:
         into a Task. Actively published to `warehouse.work-planning.events`.
         The outbound adapter enriches the `data` payload with the unit's
         `cpt` and `ref` by reading the WorkUnit repository, since the domain
-        event itself only carries the identifiers.
+        event itself only carries the identifiers. When the released unit
+        carries a known SKU, the adapter also performs a synchronous read of
+        that SKU's classification from inventory-storage
+        (`GET /products/{sku}/classification`, see ADR-0009 in this
+        service's ADR index) and stamps two OPTIONAL derived fields,
+        `required_capabilities` and `fragile`, present only when there is a
+        hint to give.
       contentType: application/cloudevents+json
       tags:
         - name: workunit
@@ -279,6 +291,25 @@ components:
               work_unit_id: wu-10231
               cpt: "2026-08-22T02:00:00Z"
               ref: order-88421-line-3
+        - name: workReleasedHazmatFragile
+          summary: >-
+            A pick task for a SKU classified both Hazmat and Fragile in
+            inventory-storage was released; both optional hints are present.
+          payload:
+            specversion: "1.0"
+            id: 2e8f5c01-4d69-4e33-a057-9c2d1f6b8354
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workunit.WorkReleased
+            subject: wu-10232
+            time: "2026-08-21T22:13:05Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+              work_unit_id: wu-10232
+              cpt: "2026-08-22T02:05:00Z"
+              ref: order-88421-line-4
+              required_capabilities: ["hazmat"]
+              fragile: true
 
     WorkUnitCompleted:
       name: WorkUnitCompleted
@@ -588,7 +619,11 @@ components:
               description: >-
                 Payload published by the outbound Kafka adapter, enriched
                 from the WorkUnit repository with the unit's CPT and
-                reference.
+                reference, the caller-stated gift-wrap request when one was
+                made (see ADR-0010), and — when the released unit carries a
+                known SKU — with derived hazmat-capability/fragile hints
+                read once, synchronously, from inventory-storage's product
+                classification at publish time (see ADR-0009).
               required:
                 - path_id
                 - work_unit_id
@@ -616,6 +651,44 @@ components:
                     Caller-supplied business reference for the unit (for
                     example an order line). Empty string if the unit could
                     not be re-read at publish time.
+                required_capabilities:
+                  type: array
+                  items:
+                    type: string
+                  description: >-
+                    OPTIONAL. Present only when the released unit's SKU is
+                    classified Hazmat in inventory-storage, in which case it
+                    contains exactly `["hazmat"]`. Absent — not an empty
+                    array — when the SKU is unclassified, unknown, or the
+                    inventory-storage lookup is unavailable
+                    (PRODUCT_CLASSIFICATION_MODE=permissive, the default, or
+                    a lookup error). Consumers must treat an absent field
+                    identically to an empty array. See ADR-0009.
+                  example: ["hazmat"]
+                fragile:
+                  type: boolean
+                  description: >-
+                    OPTIONAL. Present and `true` only when the released
+                    unit's SKU is classified Fragile in inventory-storage.
+                    Absent — not `false` — when the SKU is unclassified,
+                    unknown, or the lookup is unavailable. Consumers must
+                    treat an absent field identically to `false`. See
+                    ADR-0009.
+                  example: true
+                gift_wrap:
+                  type: boolean
+                  description: >-
+                    OPTIONAL. Present and `true` only when the requester
+                    asked the warehouse to produce a gift package for this
+                    work unit, stated at enqueue time. This is a
+                    caller-supplied `WorkReleased` characteristic, not a
+                    derived product-classification hint — unlike
+                    `required_capabilities`/`fragile`, it is read straight
+                    off the `WorkUnit` and never looked up from
+                    inventory-storage (see ADR-0010). Absent — not `false`
+                    — when gift wrap was not requested. Consumers must
+                    treat an absent field identically to `false`.
+                  example: true
 
     WorkUnitCompletedEvent:
       title: WorkUnitCompleted CloudEvent

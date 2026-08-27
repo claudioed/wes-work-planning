@@ -54,6 +54,9 @@ physical world violates several times a minute.
 | **Reference** | The external identifier a work unit points back at (e.g. an order line). Required and non-empty. |
 | **LaborPlanObserved** | Read-only projection, keyed by `path_id`, of the labour plan Workforce Management last committed. |
 | **UsableInventoryObserved** | Read-only projection, keyed by **SKU**, of usable quantity as Inventory last reported it. |
+| **SKU** (on `WorkUnit`) | Optional inventory SKU the work unit's order line corresponds to. Empty is valid — not every caller knows one. Exists solely so `ReleaseNextWork`'s outbound publisher can look up a `ProductClassificationView` once, at release time. |
+| **ProductClassificationView** | A plain, un-persisted read model — the result of a **synchronous** HTTP read from inventory-storage's `GET /products/{sku}/classification`, made once at release time. Not a Kafka projection (see the trap below). |
+| **GiftWrap** (on `WorkUnit`) | Optional, caller-stated at enqueue time: whether the requester asked the warehouse to produce a gift package for this work unit. **Not** a product attribute or `ProductClassification` tag — the same SKU may be gift-wrapped on one order and not another. Stamped directly onto `WorkReleased` as `gift_wrap`, read straight off the `WorkUnit`, never looked up from `inventory-storage`. See [ADR-0010](../adr/0010-gift-wrap-as-a-work-released-characteristic.md). |
 
 ## The traps
 
@@ -93,3 +96,41 @@ Backlog depth, actual rate and plan-vs-actual are **projections**. They are
 computed from pool state or built from events; none of them is a field
 maintained on an aggregate. Storing them on an aggregate would create a second
 source of truth that drifts. See [Read models](../ddd/read-models.md).
+
+### Trap 4 — `ProductClassificationView` is not `UsableInventoryObserved`
+
+Both originate in `inventory-storage`, both are keyed by SKU, and it would be
+easy to assume they arrive the same way. They do not.
+
+`UsableInventoryObserved` is a **persisted Kafka projection**: `StockReserved`
+and `ReservationRevoked` are part of inventory-storage's published integration
+contract, so this service consumes them continuously and keeps a running
+read model in Postgres/memory.
+
+`ProductClassificationView` is a **synchronous HTTP read, not persisted at
+all**. inventory-storage's `ProductClassified` event exists in its domain-event
+catalogue but its own outbound Kafka publisher explicitly does not forward it
+to the broker (see that repo's `publisher.go` doc comment) — there is nothing
+to consume. Instead, `ReleaseNextWork`'s outbound publisher calls
+`GET /products/{sku}/classification` **once**, at the moment a unit is
+released, and stamps the result onto that one `WorkReleased` event. See
+[ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md).
+
+### Trap 5 — `GiftWrap` is not a `ProductClassification` tag
+
+Both `gift_wrap` and `fragile` are optional booleans on the same
+`WorkReleased.data` payload, both omitted when false — it would be easy to
+assume they arrive the same way. They do not.
+
+`fragile` is **derived**: looked up from `inventory-storage`'s
+`ProductClassification` for the released unit's SKU, via the synchronous
+`ProductClassificationLookup` port (see Trap 4 above and
+[ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md)).
+It says something about the *product*.
+
+`gift_wrap` is **caller-supplied**: stated on `EnqueueWorkUnitRequest` at
+enqueue time and read straight off the `WorkUnit`, exactly like `cpt` or
+`reference`. It never touches `inventory-storage`, has no fail-open lookup
+concern, and says something about *this particular unit of work* — the same
+SKU can be gift-wrapped on one order and not on another. See
+[ADR-0010](../adr/0010-gift-wrap-as-a-work-released-characteristic.md).

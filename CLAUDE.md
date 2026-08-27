@@ -36,6 +36,24 @@ internal/
 migrations/                  golang-migrate SQL files
 ```
 
+## Analytics data product (ADR-0011)
+
+Additive read side built from this service's OWN domain events. The OLTP
+domain/application layers are NOT modified and must NOT import the analytics
+store (arch-test enforces). `internal/analytics/report/` depends on nothing.
+
+- Events are fanned to a SEPARATE topic `warehouse.wes.analytics` by a new
+  outbound adapter; the integration topic/publisher are untouched. Selected by
+  `EVENT_PUBLISHER=kafka` (fan-out alongside the integration publisher).
+- Separate analytical Postgres (`ANALYTICS_DATABASE_URL`), own migrations
+  (`migrations/analytics/`), read-only reader role.
+- Three processes: `cmd/wes` (OLTP), `cmd/wes-projector` (the ONLY writer;
+  consumes the analytics topic from FirstOffset, idempotent on event_id),
+  `cmd/wes-reports` (read-only reader, `GET /reports/...`).
+- Report: **Release Throughput & Backlog Health**, keyed per path × hour
+  (work released/completed, backlog breaches, path throttles, rate deviations).
+- `GET /reports/throughput/freshness` reports projection lag.
+
 ## Ubiquitous Language (use these exact names)
 
 - **Charge** — volume that must clear, bucketed by CPT. Not "total due today".
@@ -53,6 +71,23 @@ migrations/                  golang-migrate SQL files
   (waveless). The release decision is a POLICY object, not a schedule.
 - **Flow balancing** — on telemetry (backlog vs plan): throttle upstream release
   or flag labor reassignment. Drum-Buffer-Rope with CPT as the drum.
+- **WorkUnit.SKU** — optional SKU carried by a WorkUnit (threaded from
+  `EnqueueWorkUnitRequest.SKU`), used ONLY to look up the SKU's
+  `ProductClassification` from `inventory-storage` once, at release time.
+- **Product classification propagation** — `ReleaseNextWork` reads a released
+  WorkUnit's SKU classification (via `ports.ProductClassificationLookup`,
+  a synchronous HTTP read mirroring inventory-storage's own facilitylayout
+  adapter pattern; permissive-by-default, `PRODUCT_CLASSIFICATION_MODE=http|permissive`)
+  and stamps derived `required_capabilities: ["hazmat"]` / `fragile: true`
+  onto the outbound `WorkReleased` event's `data` payload when applicable.
+  Both fields are OPTIONAL and OMITTED (not defaulted false/empty) when the
+  SKU is unclassified or the lookup is unavailable — fail-open, deliberately
+  asymmetric with inventory-storage's fail-closed `StowStock` check (ADR-0009).
+  `fulfillment-execution`'s Task carries these onward without ever calling
+  inventory-storage directly — the same "Task carries what a station needs
+  to know" design already used for CPT and requiredCapabilities.
+- **Known gap**: classification drift after release is not retroactively
+  applied — a WorkUnit stamps classification once, at release time.
 
 ## Aggregates & invariants (enforce in domain, unit-tested)
 

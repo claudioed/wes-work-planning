@@ -69,6 +69,18 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'AI Ecosystem (MCP)',
+      collapsed: false,
+      items: ['mcp/governance-charter'],
+    },
+    {
+      type: 'category',
+      label: 'Analytics (Data Product)',
+      collapsed: false,
+      items: ['analytics/release-throughput-report'],
+    },
+    {
+      type: 'category',
       label: 'Architecture Decision Records',
       link: {type: 'doc', id: 'adr/index'},
       items: [
@@ -79,6 +91,10 @@ const sidebars: SidebarsConfig = {
         'adr/0005-rfc-7807-problem-details',
         'adr/0006-labor-plan-view-not-shift-plan',
         'adr/0007-arch-go-fitness-tests',
+        'adr/0008-mcp-inbound-adapter',
+        'adr/0009-product-classification-propagation-to-work-released',
+        'adr/0010-gift-wrap-as-a-work-released-characteristic',
+        'adr/0011-analytical-data-product',
       ],
     },
   ],
