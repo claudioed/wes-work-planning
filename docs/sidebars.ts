@@ -75,6 +75,12 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Analytics (Data Product)',
+      collapsed: false,
+      items: ['analytics/release-throughput-report'],
+    },
+    {
+      type: 'category',
       label: 'Architecture Decision Records',
       link: {type: 'doc', id: 'adr/index'},
       items: [
@@ -88,6 +94,7 @@ const sidebars: SidebarsConfig = {
         'adr/0008-mcp-inbound-adapter',
         'adr/0009-product-classification-propagation-to-work-released',
         'adr/0010-gift-wrap-as-a-work-released-characteristic',
+        'adr/0011-analytical-data-product',
       ],
     },
   ],

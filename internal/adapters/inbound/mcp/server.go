@@ -33,6 +33,7 @@ func NewServer(deps Deps) *mcp.Server {
 	)
 
 	deps.registerTools(server, scopeFromContext)
+	deps.registerReportTool(server, scopeFromContext)
 	deps.registerResources(server, scopeFromContext)
 	deps.registerPrompts(server, scopeFromContext)
 

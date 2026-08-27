@@ -77,6 +77,61 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
 | `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
 
+## Analytics data product (Release Throughput & Backlog Health)
+
+Alongside the OLTP service, this repo owns a per-service **analytical data
+product** built entirely from its own domain events — a lightweight data mesh
+with no central data platform. See
+[ADR-0011](./docs/docs/adr/0011-analytical-data-product.md) and the
+[report contract](./docs/docs/analytics/release-throughput-report.md).
+
+Three processes, one writer:
+
+- `cmd/wes` — OLTP (unchanged). With `EVENT_PUBLISHER=kafka` it fans every
+  domain event to both the integration topic (`warehouse.work-planning.events`)
+  and the separate analytics topic (`warehouse.wes.analytics`).
+- `cmd/wes-projector` — the **only** writer of the analytical database. Consumes
+  `warehouse.wes.analytics` (from the earliest offset), applies idempotent
+  projections, and runs the analytical migrations on start.
+- `cmd/wes-reports` — read-only reader. Serves `GET /reports/throughput` and
+  `GET /reports/throughput/freshness` over a read-only pool.
+
+```sh
+docker compose up -d   # Kafka + Postgres
+
+# Create a separate analytical database (baseline: same Postgres release), then:
+export ANALYTICS_DATABASE_URL="postgres://wes:***@localhost:5432/wes_analytics?sslmode=disable"
+export KAFKA_BROKERS="localhost:9092"
+
+# 1) OLTP service, publishing to both topics
+EVENT_PUBLISHER=kafka DATABASE_URL="postgres://wes:***@localhost:5432/wes?sslmode=disable" \
+  go run ./cmd/wes
+
+# 2) The writer: consumes the analytics topic, migrates + projects (admin :8091)
+go run ./cmd/wes-projector
+
+# 3) The reader: serves the report read-only (:8092)
+go run ./cmd/wes-reports
+
+# Query it
+curl "localhost:8092/reports/throughput?from=2026-01-01T00:00:00Z&to=2027-01-01T00:00:00Z"
+curl "localhost:8092/reports/throughput/freshness"
+```
+
+The MCP server (`cmd/mcp`) exposes the read-only `get_release_throughput_report`
+tool when `REPORTS_BASE_URL` (e.g. `http://localhost:8092`) is set; it calls the
+reports REST rather than opening the analytical database.
+
+### Analytics config
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `ANALYTICS_DATABASE_URL` | (unset) | Analytical DB DSN. Required by `cmd/wes-projector` (read-write) and `cmd/wes-reports` (read-only role recommended). |
+| `ANALYTICS_MIGRATIONS_PATH` | `migrations/analytics` | Directory of analytical `*.up.sql` migrations the projector applies on start. |
+| `ADMIN_ADDR` | `:8091` | `cmd/wes-projector` health endpoint address. |
+| `HTTP_ADDR` (reports) | `:8092` | `cmd/wes-reports` REST address. |
+| `REPORTS_BASE_URL` | (unset) | When set on `cmd/mcp`, enables the `get_release_throughput_report` MCP tool pointed at the reports REST. |
+
 ## API
 
 All bodies/responses are JSON. Timestamps are RFC3339. Every endpoint is also

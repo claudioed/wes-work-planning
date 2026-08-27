@@ -106,6 +106,15 @@ func run() error {
 		RebalanceDecision: usecases.NewRebalanceDecision(pools, publisher, clock),
 		ReleaseNextWork:   usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
 	}
+	// When the wes-reports REST service is reachable, expose the curated,
+	// read-only "Release Throughput & Backlog Health" report tool. It calls
+	// that REST surface rather than opening the analytical database directly,
+	// so no process touches a datastore it does not own (ADR-0011). Absent
+	// REPORTS_BASE_URL the tool is simply not registered.
+	if reportsBaseURL := os.Getenv("REPORTS_BASE_URL"); reportsBaseURL != "" {
+		logger.Info("release throughput report tool enabled", "reports_base_url", reportsBaseURL)
+		deps.Reports = inboundmcp.NewReportsRESTClient(reportsBaseURL, nil)
+	}
 	server := inboundmcp.NewServer(deps)
 
 	auth := inboundmcp.NewStaticKeyAuth(authKeys(logger))

@@ -34,6 +34,12 @@ type Deps struct {
 	// release policy and the pool's WIP invariant make a model-invoked release
 	// safe by construction: it admits at most the next priority-ordered unit.
 	ReleaseNextWork *usecases.ReleaseNextWork
+	// Reports is the optional client of the wes-reports REST service backing
+	// the curated, read-only "Release Throughput & Backlog Health" report
+	// tool. When nil (no reports service configured) that tool is simply not
+	// registered, so an MCP deployment without analytics still works
+	// unchanged (ADR-0011). It never opens the analytical database directly.
+	Reports ReportsClient
 }
 
 // --- get_backlog_telemetry ----------------------------------------------------
