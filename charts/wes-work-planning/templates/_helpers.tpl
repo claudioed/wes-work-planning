@@ -69,3 +69,28 @@ Name of the Secret holding DATABASE_URL, when the chart creates its own.
 {{- include "wes-work-planning.fullname" . }}-database
 {{- end }}
 {{- end }}
+
+{{/*
+Fully qualified name of the analytics projector deployment (ADR-0011).
+*/}}
+{{- define "wes-work-planning.projectorFullname" -}}
+{{- include "wes-work-planning.fullname" . }}-projector
+{{- end }}
+
+{{/*
+Fully qualified name of the analytics reports deployment/service (ADR-0011).
+*/}}
+{{- define "wes-work-planning.reportsFullname" -}}
+{{- include "wes-work-planning.fullname" . }}-reports
+{{- end }}
+
+{{/*
+Name of the Secret holding the analytics DSNs, when the chart creates its own.
+*/}}
+{{- define "wes-work-planning.analyticsSecretName" -}}
+{{- if .Values.analytics.database.existingSecret }}
+{{- .Values.analytics.database.existingSecret }}
+{{- else }}
+{{- include "wes-work-planning.fullname" . }}-analytics
+{{- end }}
+{{- end }}
