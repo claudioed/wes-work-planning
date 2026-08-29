@@ -190,6 +190,38 @@ jobs:
       - name: Architecture fitness tests
         run: go test ./internal/architecture/... -v
 
+  # Guards against the generated "API Reference -> REST API" docs
+  # (docs/docs/api/rest/, produced by docusaurus-plugin-openapi-docs from
+  # apis/openapi.yaml) drifting out of sync with the spec they're supposed to
+  # mirror. Regenerates them exactly as `prebuild`/gen-api-docs would and
+  # fails the PR if that produces any diff — i.e. someone changed
+  # apis/openapi.yaml (or hand-edited the generated files) without running
+  # `npm run gen-api-docs` and committing the result.
+  docs-api-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+      - run: npm ci
+      - name: Regenerate REST API docs from apis/openapi.yaml
+        run: npm run clean-api-docs wes && npm run gen-api-docs wes
+      - name: Fail if generated docs differ from what's committed
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- docs/api/rest; then
+            echo "::error::docs/docs/api/rest is out of sync with apis/openapi.yaml." \
+                 "Run 'npm run gen-api-docs wes' inside docs/ and commit the result."
+            exit 1
+          fi
+
   helm-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -259,7 +291,7 @@ jobs:
   docker-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [lint, test, bdd, integration, api-lint, helm-lint, arch-test, mutation-fast, vuln, trivy-scan]
+    needs: [lint, test, bdd, integration, api-lint, helm-lint, arch-test, docs-api-drift, mutation-fast, vuln, trivy-scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read

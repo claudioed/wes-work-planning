@@ -2,7 +2,13 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ["docs/**", ".github/workflows/docs.yml"]
+    # apis/openapi.yaml drives docusaurus-plugin-openapi-docs' generated
+    # "API Reference -> REST API" pages (docs/docs/api/rest/, built by the
+    # `prebuild` npm script). Without apis/** here, a spec-only change never
+    # triggers a rebuild/redeploy and the published API Reference silently
+    # goes stale relative to apis/openapi.yaml. See ci.yml's docs-api-drift
+    # job for the PR-time guard that catches the same drift before merge.
+    paths: ["docs/**", "apis/openapi.yaml", ".github/workflows/docs.yml"]
   workflow_dispatch: {}
 
 permissions:

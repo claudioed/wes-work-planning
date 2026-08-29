@@ -1,0 +1,1 @@
+{"parameters":[{"name":"reference","in":"query","required":true,"description":"The external order-line reference to look up (as supplied on `EnqueueWorkUnitRequest.reference`). Missing or empty returns `400`.\n","schema":{"type":"string","minLength":1},"example":"order-77213-line-1"}]}
