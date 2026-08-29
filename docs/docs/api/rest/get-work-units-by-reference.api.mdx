@@ -1,0 +1,70 @@
+---
+id: get-work-units-by-reference
+title: "Look up work units by their external order-line reference"
+description: "Returns every `WorkUnit` ever enqueued for the given `reference` — the GetWorkUnitsByReference use case. `reference` is the external reference threaded through `POST /paths/{pathId}/work-units` (typically an order line), NOT this service's internal client-supplied `workUnitId`. A reference can plausibly correspond to more than one `WorkUnit` across retries/history (e.g. re-enqueued after an abandoned attempt) — the response is always an array, even when a caller expects at most one live unit, and is empty (not `404`) when the reference has never been seen. This is the cross-service lookup a console screen uses to answer 'what work did this service release for order X, line N'."
+sidebar_label: "Look up work units by their external order-line reference"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api/rest/wes-work-planning-release
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Look up work units by their external order-line reference"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/work-units"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns every `WorkUnit` ever enqueued for the given `reference` — the GetWorkUnitsByReference use case. `reference` is the external reference threaded through `POST /paths/{pathId}/work-units` (typically an order line), NOT this service's internal client-supplied `workUnitId`. A reference can plausibly correspond to more than one `WorkUnit` across retries/history (e.g. re-enqueued after an abandoned attempt) — the response is always an array, even when a caller expects at most one live unit, and is empty (not `404`) when the reference has never been seen. This is the cross-service lookup a console screen uses to answer "what work did this service release for order X, line N".
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-work-units-by-reference.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-work-units-by-reference.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-work-units-by-reference.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      
