@@ -48,6 +48,7 @@ func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
 	})
 
 	r.Post("/work-units/{id}/complete", h.postComplete)
+	r.Get("/work-units", h.getWorkUnitsByReference)
 
 	r.Get("/inventory-view/{sku}", h.getInventoryView)
 

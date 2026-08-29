@@ -36,6 +36,16 @@ type WorkUnitRepo interface {
 	Save(ctx context.Context, unit *workunit.WorkUnit) error
 	FindById(ctx context.Context, id string) (*workunit.WorkUnit, error)
 	FindByPathId(ctx context.Context, pathId shared.PathId) ([]*workunit.WorkUnit, error)
+	// FindByReference returns every WorkUnit ever enqueued for the given
+	// external reference (e.g. an order line). A reference can plausibly
+	// have more than one WorkUnit across retries/history (e.g. a work unit
+	// enqueued, its process abandoned, and a fresh one enqueued for the
+	// same order line under a new workUnitId) — callers must treat the
+	// result as a history, not assume at most one match. Returns an empty
+	// slice (not ports.ErrNotFound) when no work unit carries this
+	// reference; that mirrors FindByPathId's empty-collection semantics
+	// rather than FindById's single-resource semantics.
+	FindByReference(ctx context.Context, reference string) ([]*workunit.WorkUnit, error)
 }
 
 // EventPublisher publishes domain events raised by use cases.

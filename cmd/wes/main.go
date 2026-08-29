@@ -136,15 +136,16 @@ func run() error {
 	enqueueWorkUnit := usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock)
 
 	handlers := &inboundhttp.Handlers{
-		ReceiveChargeForecast: usecases.NewReceiveChargeForecast(charges, publisher, clock),
-		CommitShiftPlan:       usecases.NewCommitShiftPlan(plans, publisher, clock),
-		EnqueueWorkUnit:       enqueueWorkUnit,
-		ReleaseNextWork:       usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
-		RecordCompletion:      recordCompletion,
-		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
-		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
-		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),
-		InventoryView:         usecases.NewInventoryView(inventoryViews),
+		ReceiveChargeForecast:   usecases.NewReceiveChargeForecast(charges, publisher, clock),
+		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock),
+		EnqueueWorkUnit:         enqueueWorkUnit,
+		ReleaseNextWork:         usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
+		RecordCompletion:        recordCompletion,
+		SampleBacklog:           usecases.NewSampleBacklog(pools, publisher, clock),
+		RebalanceDecision:       usecases.NewRebalanceDecision(pools, publisher, clock),
+		LaborPlanView:           usecases.NewLaborPlanView(laborPlanViews),
+		InventoryView:           usecases.NewInventoryView(inventoryViews),
+		GetWorkUnitsByReference: usecases.NewGetWorkUnitsByReference(workUnits),
 	}
 
 	router := inboundhttp.NewRouter(handlers, otelServiceName, logger)

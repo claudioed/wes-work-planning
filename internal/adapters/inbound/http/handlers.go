@@ -30,6 +30,10 @@ type Handlers struct {
 	// Additive: cross-service integration read models (Task 7).
 	LaborPlanView *usecases.LaborPlanView
 	InventoryView *usecases.InventoryView
+
+	// Additive: read-only lookup of work units by their order-line
+	// reference, for cross-service console screens.
+	GetWorkUnitsByReference *usecases.GetWorkUnitsByReference
 }
 
 func pathIdParam(r *http.Request) (shared.PathId, error) {
@@ -56,12 +60,15 @@ func toBucketDTOs(buckets []charge.CPTBucket) []cptBucketDTO {
 
 func toWorkUnitResponseDTO(unit *workunit.WorkUnit) workUnitResponseDTO {
 	return workUnitResponseDTO{
-		Id:        unit.Id(),
-		PathId:    unit.PathId().String(),
-		CPT:       unit.CPT().Time(),
-		Reference: unit.Reference(),
-		State:     unit.State().String(),
-		GiftWrap:  unit.GiftWrap(),
+		Id:          unit.Id(),
+		PathId:      unit.PathId().String(),
+		CPT:         unit.CPT().Time(),
+		Reference:   unit.Reference(),
+		State:       unit.State().String(),
+		GiftWrap:    unit.GiftWrap(),
+		SKU:         unit.SKU(),
+		ReleasedAt:  unit.ReleasedAt(),
+		CompletedAt: unit.CompletedAt(),
 	}
 }
 
@@ -315,4 +322,25 @@ func (h *Handlers) getInventoryView(w http.ResponseWriter, r *http.Request) {
 
 func healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h *Handlers) getWorkUnitsByReference(w http.ResponseWriter, r *http.Request) {
+	reference := r.URL.Query().Get("reference")
+	if reference == "" {
+		writeError(w, r, errMissingReference)
+		return
+	}
+
+	units, err := h.GetWorkUnitsByReference.Execute(r.Context(), usecases.GetWorkUnitsByReferenceRequest{Reference: reference})
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	out := make([]workUnitResponseDTO, len(units))
+	for i, unit := range units {
+		out[i] = toWorkUnitResponseDTO(unit)
+	}
+
+	writeJSON(w, http.StatusOK, out)
 }

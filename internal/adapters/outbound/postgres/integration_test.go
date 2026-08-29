@@ -123,6 +123,55 @@ func TestPostgresRepos(t *testing.T) {
 		}
 	})
 
+	t.Run("work unit repo FindByReference", func(t *testing.T) {
+		unitRepo := postgres.NewWorkUnitRepo(pool)
+		cpt := shared.NewCPT(time.Now().Add(time.Hour).Truncate(time.Microsecond))
+		reference := "integration-order-77213-line-1"
+
+		unit1, err := workunit.NewWorkUnit("integration-ref-wu-1", pathId, cpt, reference)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := unitRepo.Save(ctx, unit1); err != nil {
+			t.Fatalf("save unit 1: %v", err)
+		}
+		unit2, err := workunit.NewWorkUnit("integration-ref-wu-2", pathId, cpt, reference)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := unitRepo.Save(ctx, unit2); err != nil {
+			t.Fatalf("save unit 2: %v", err)
+		}
+		otherUnit, err := workunit.NewWorkUnit("integration-ref-wu-other", pathId, cpt, "integration-other-ref")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := unitRepo.Save(ctx, otherUnit); err != nil {
+			t.Fatalf("save other unit: %v", err)
+		}
+
+		got, err := unitRepo.FindByReference(ctx, reference)
+		if err != nil {
+			t.Fatalf("find by reference: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("got %d units, want 2", len(got))
+		}
+		for _, u := range got {
+			if u.Reference() != reference {
+				t.Fatalf("got reference %q, want %q", u.Reference(), reference)
+			}
+		}
+
+		none, err := unitRepo.FindByReference(ctx, "integration-nonexistent-ref")
+		if err != nil {
+			t.Fatalf("find by reference (no match): %v", err)
+		}
+		if len(none) != 0 {
+			t.Fatalf("got %d units, want 0", len(none))
+		}
+	})
+
 	t.Run("labor plan view, inventory view, and idempotent processed events", func(t *testing.T) {
 		laborRepo := postgres.NewLaborPlanViewRepo(pool)
 		inventoryRepo := postgres.NewInventoryViewRepo(pool)
