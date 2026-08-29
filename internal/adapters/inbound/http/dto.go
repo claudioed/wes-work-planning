@@ -72,6 +72,13 @@ type workUnitResponseDTO struct {
 	Reference string    `json:"reference"`
 	State     string    `json:"state"`
 	GiftWrap  bool      `json:"giftWrap"`
+	// SKU is the optional inventory SKU this work unit's order line
+	// corresponds to, omitted when not known (see EnqueueWorkUnitRequest.SKU).
+	SKU string `json:"sku,omitempty"`
+	// ReleasedAt/CompletedAt are omitted (not null) until the work unit
+	// reaches the corresponding lifecycle state.
+	ReleasedAt  *time.Time `json:"releasedAt,omitempty"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
 type backlogSnapshotResponseDTO struct {

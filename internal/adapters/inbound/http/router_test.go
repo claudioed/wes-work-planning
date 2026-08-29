@@ -28,15 +28,16 @@ func newTestRouter() http.Handler {
 	clock := memory.FixedClock{At: time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)}
 
 	h := &inboundhttp.Handlers{
-		ReceiveChargeForecast: usecases.NewReceiveChargeForecast(charges, publisher, clock),
-		CommitShiftPlan:       usecases.NewCommitShiftPlan(plans, publisher, clock),
-		EnqueueWorkUnit:       usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock),
-		ReleaseNextWork:       usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
-		RecordCompletion:      usecases.NewRecordCompletion(workUnits, publisher, clock),
-		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
-		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
-		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),
-		InventoryView:         usecases.NewInventoryView(inventoryViews),
+		ReceiveChargeForecast:   usecases.NewReceiveChargeForecast(charges, publisher, clock),
+		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock),
+		EnqueueWorkUnit:         usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock),
+		ReleaseNextWork:         usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
+		RecordCompletion:        usecases.NewRecordCompletion(workUnits, publisher, clock),
+		SampleBacklog:           usecases.NewSampleBacklog(pools, publisher, clock),
+		RebalanceDecision:       usecases.NewRebalanceDecision(pools, publisher, clock),
+		LaborPlanView:           usecases.NewLaborPlanView(laborPlanViews),
+		InventoryView:           usecases.NewInventoryView(inventoryViews),
+		GetWorkUnitsByReference: usecases.NewGetWorkUnitsByReference(workUnits),
 	}
 
 	return inboundhttp.NewRouter(h, "wes-work-planning", nil)
@@ -464,5 +465,114 @@ func TestGetInventoryView_ReturnsObservedQuantity(t *testing.T) {
 	}
 	if view["usableQuantity"] != float64(-3) {
 		t.Fatalf("unexpected inventory-view body: %s", rec.Body.String())
+	}
+}
+
+func TestGetWorkUnitsByReference_ReturnsMatches(t *testing.T) {
+	router := newTestRouter()
+	enqueueBody1 := map[string]any{
+		"workUnitId": "wu-ref-1",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-77213-line-1",
+	}
+	enqueueBody2 := map[string]any{
+		"workUnitId": "wu-ref-2",
+		"cpt":        time.Date(2026, 8, 21, 13, 0, 0, 0, time.UTC),
+		"reference":  "order-77213-line-1",
+	}
+	otherBody := map[string]any{
+		"workUnitId": "wu-other",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-99999-line-1",
+	}
+	if rec := doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", enqueueBody1); rec.Code != http.StatusCreated {
+		t.Fatalf("setup: got status %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", enqueueBody2); rec.Code != http.StatusCreated {
+		t.Fatalf("setup: got status %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", otherBody); rec.Code != http.StatusCreated {
+		t.Fatalf("setup: got status %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec := doJSON(t, router, http.MethodGet, "/work-units?reference=order-77213-line-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var units []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &units); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(units) != 2 {
+		t.Fatalf("got %d units, want 2, body=%s", len(units), rec.Body.String())
+	}
+	ids := map[string]bool{}
+	for _, u := range units {
+		ids[u["id"].(string)] = true
+		if u["reference"] != "order-77213-line-1" {
+			t.Fatalf("got reference %v, want order-77213-line-1", u["reference"])
+		}
+		if _, ok := u["pathId"]; !ok {
+			t.Fatalf("expected pathId field, got %v", u)
+		}
+		if _, ok := u["state"]; !ok {
+			t.Fatalf("expected state field, got %v", u)
+		}
+	}
+	if !ids["wu-ref-1"] || !ids["wu-ref-2"] {
+		t.Fatalf("expected both wu-ref-1 and wu-ref-2 in response, got %v", ids)
+	}
+}
+
+func TestGetWorkUnitsByReference_NoMatchesReturnsEmptyArray(t *testing.T) {
+	router := newTestRouter()
+
+	rec := doJSON(t, router, http.MethodGet, "/work-units?reference=nonexistent", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var units []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &units); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("got %d units, want 0", len(units))
+	}
+}
+
+func TestGetWorkUnitsByReference_MissingReferenceReturns400(t *testing.T) {
+	router := newTestRouter()
+
+	rec := doJSON(t, router, http.MethodGet, "/work-units", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("got Content-Type %q, want application/problem+json", ct)
+	}
+	var problem struct {
+		Type     string `json:"type"`
+		Title    string `json:"title"`
+		Status   int    `json:"status"`
+		Detail   string `json:"detail"`
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("unmarshal problem+json body: %v", err)
+	}
+	if problem.Status != http.StatusBadRequest {
+		t.Fatalf("got problem.status %d, want 400", problem.Status)
+	}
+	if problem.Instance != "/work-units" {
+		t.Fatalf("got instance %q, want /work-units", problem.Instance)
+	}
+}
+
+func TestGetWorkUnitsByReference_EmptyReferenceReturns400(t *testing.T) {
+	router := newTestRouter()
+
+	rec := doJSON(t, router, http.MethodGet, "/work-units?reference=", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
 }

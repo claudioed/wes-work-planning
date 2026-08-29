@@ -19,10 +19,15 @@ import (
 // server error.
 var errMalformedBody = errors.New("malformed request body")
 
+// errMissingReference is a sentinel wrapped around a missing/empty
+// `reference` query parameter on GET /work-units, mapped to 400 the same
+// way errMalformedBody routes decode failures.
+var errMissingReference = errors.New("reference query parameter is required")
+
 // statusFor maps a domain/application error to an HTTP status code.
 func statusFor(err error) int {
 	switch {
-	case errors.Is(err, errMalformedBody):
+	case errors.Is(err, errMalformedBody), errors.Is(err, errMissingReference):
 		return http.StatusBadRequest
 	case errors.Is(err, ports.ErrNotFound):
 		return http.StatusNotFound
@@ -65,6 +70,8 @@ func problemFor(err error) (typeURI, title string) {
 	switch {
 	case errors.Is(err, errMalformedBody):
 		return problemBaseURI + "malformed-request-body", "Malformed request body"
+	case errors.Is(err, errMissingReference):
+		return problemBaseURI + "reference-required", "Reference query parameter is required"
 	case errors.Is(err, ports.ErrNotFound):
 		return problemBaseURI + "not-found", "Resource not found"
 	case errors.Is(err, release.ErrWIPLimitReached):
