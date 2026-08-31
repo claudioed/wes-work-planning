@@ -118,7 +118,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	processed := memory.NewProcessedEventRepo()
 	observeLabor := usecases.NewObserveLaborPlan(laborViews, processed)
 	observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processed)
-	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+	recordCompletion := usecases.NewRecordCompletion(workUnits, pools, publisher, clock)
 
 	groupID := fmt.Sprintf("wes-integration-test-%d", time.Now().UnixNano())
 	consumer := inboundkafka.NewConsumer(brokers, groupID, observeLabor, observeInventory, recordCompletion, enqueue, processed, nil)

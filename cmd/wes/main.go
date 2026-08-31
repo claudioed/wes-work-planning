@@ -132,7 +132,7 @@ func run() error {
 		publisher = events.NewLogPublisher(logger)
 	}
 
-	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+	recordCompletion := usecases.NewRecordCompletion(workUnits, pools, publisher, clock)
 	enqueueWorkUnit := usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock)
 
 	handlers := &inboundhttp.Handlers{
