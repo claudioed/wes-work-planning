@@ -47,7 +47,7 @@ func newServer() *httptest.Server {
 		CommitShiftPlan:       usecases.NewCommitShiftPlan(plans, publisher, clock),
 		EnqueueWorkUnit:       usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock),
 		ReleaseNextWork:       usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
-		RecordCompletion:      usecases.NewRecordCompletion(workUnits, publisher, clock),
+		RecordCompletion:      usecases.NewRecordCompletion(workUnits, pools, publisher, clock),
 		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
 		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
 		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),

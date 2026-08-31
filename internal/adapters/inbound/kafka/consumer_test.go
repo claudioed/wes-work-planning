@@ -30,7 +30,7 @@ func newFulfillmentFixture() fulfillmentFixture {
 	clock := memory.FixedClock{At: time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC)}
 	processed := memory.NewProcessedEventRepo()
 
-	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+	recordCompletion := usecases.NewRecordCompletion(workUnits, pools, publisher, clock)
 
 	return fulfillmentFixture{
 		workUnits: workUnits,

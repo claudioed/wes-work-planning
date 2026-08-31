@@ -8,6 +8,7 @@ var (
 	ErrDuplicateEntry  = errors.New("work unit already enqueued in this pool")
 	ErrUnknownEntry    = errors.New("work unit not found in this pool")
 	ErrAlreadyReleased = errors.New("work unit already released from this pool")
+	ErrNotReleased     = errors.New("work unit has not been released from this pool yet")
 	ErrWIPLimitReached = errors.New("release-fed pool WIP limit reached")
 	ErrEmptyPool       = errors.New("no pending work in this pool")
 )

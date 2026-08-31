@@ -57,7 +57,10 @@ func (r *WorkPoolRepo) Save(ctx context.Context, wp *release.WorkPool) error {
 
 	for _, e := range wp.Entries() {
 		state := "pending"
-		if e.Released {
+		switch {
+		case e.Completed:
+			state = "completed"
+		case e.Released:
 			state = "released"
 		}
 		if _, err := tx.Exec(ctx, `
@@ -102,8 +105,13 @@ func (r *WorkPoolRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (
 		if err := wp.Enqueue(workUnitId, shared.NewCPT(cpt)); err != nil {
 			return nil, err
 		}
-		if state == "released" {
+		if state == "released" || state == "completed" {
 			if err := wp.Release(workUnitId); err != nil {
+				return nil, err
+			}
+		}
+		if state == "completed" {
+			if err := wp.Complete(workUnitId); err != nil {
 				return nil, err
 			}
 		}
