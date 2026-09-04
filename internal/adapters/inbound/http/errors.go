@@ -7,6 +7,7 @@ import (
 
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/domain/charge"
+	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/plan"
 	"github.com/claudioed/wes-work-planning/internal/domain/release"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
@@ -44,6 +45,7 @@ func statusFor(err error) int {
 		errors.Is(err, shared.ErrInvalidStationCount),
 		errors.Is(err, shared.ErrInvalidPathId),
 		errors.Is(err, shared.ErrInvalidHours),
+		errors.Is(err, pathcatalog.ErrUnknownPath),
 		errors.Is(err, charge.ErrNoBuckets),
 		errors.Is(err, charge.ErrUnknownCPT),
 		errors.Is(err, plan.ErrHeadsExceedStations),
@@ -96,6 +98,8 @@ func problemFor(err error) (typeURI, title string) {
 		return problemBaseURI + "invalid-station-count", "Invalid station count"
 	case errors.Is(err, shared.ErrInvalidPathId):
 		return problemBaseURI + "invalid-path-id", "Invalid path id"
+	case errors.Is(err, pathcatalog.ErrUnknownPath):
+		return problemBaseURI + "unknown-path-id", "Unrecognized process-path id"
 	case errors.Is(err, shared.ErrInvalidHours):
 		return problemBaseURI + "invalid-hours", "Invalid hours"
 	case errors.Is(err, charge.ErrNoBuckets):

@@ -12,6 +12,7 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 	"github.com/claudioed/wes-work-planning/internal/domain/charge"
 	"github.com/claudioed/wes-work-planning/internal/domain/laborview"
+	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/plan"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
@@ -27,6 +28,15 @@ type Handlers struct {
 	SampleBacklog         *usecases.SampleBacklog
 	RebalanceDecision     *usecases.RebalanceDecision
 
+	// Catalogue validates every caller-supplied path_id against the
+	// fleet's declared process-path catalogue before it is allowed to
+	// seed a new WorkPool/ChargeForecast/ShiftPlan — see
+	// fulfillment-execution's ADR-0017. A nil Catalogue (only ever the
+	// case in older tests not yet updated) skips validation rather than
+	// panicking, so this is additive, not a required wiring change for
+	// every caller.
+	Catalogue *pathcatalog.Catalogue
+
 	// Additive: cross-service integration read models (Task 7).
 	LaborPlanView *usecases.LaborPlanView
 	InventoryView *usecases.InventoryView
@@ -38,6 +48,19 @@ type Handlers struct {
 
 func pathIdParam(r *http.Request) (shared.PathId, error) {
 	return shared.NewPathId(chi.URLParam(r, "pathId"))
+}
+
+// validatePathId checks pathId against h.Catalogue when one is wired in.
+// Call this from every handler that seeds a NEW aggregate keyed by a
+// caller-supplied path_id (ChargeForecast, ShiftPlan, WorkPool via
+// EnqueueWorkUnit) — read-only lookups do not need it, since a
+// nonexistent path already surfaces as ports.ErrNotFound on its own.
+func (h *Handlers) validatePathId(pathId shared.PathId) error {
+	if h.Catalogue == nil {
+		return nil
+	}
+	_, err := h.Catalogue.Lookup(pathId.String())
+	return err
 }
 
 // decodeJSON decodes the request body into dst, writing an RFC-mapped 400
@@ -78,6 +101,10 @@ func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, err)
 		return
 	}
+	if err := h.validatePathId(pathId); err != nil {
+		writeError(w, r, err)
+		return
+	}
 
 	var body receiveChargeForecastRequestDTO
 	if !decodeJSON(w, r, &body) {
@@ -115,6 +142,10 @@ func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := h.validatePathId(pathId); err != nil {
 		writeError(w, r, err)
 		return
 	}
@@ -171,6 +202,10 @@ func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
 func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
 	pathId, err := pathIdParam(r)
 	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	if err := h.validatePathId(pathId); err != nil {
 		writeError(w, r, err)
 		return
 	}

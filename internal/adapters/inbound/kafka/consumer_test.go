@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -10,9 +11,23 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
 )
+
+// testCatalogue is the fixture catalogue every consumer test uses,
+// mirroring warehouse-infra's real sortable-fc.yaml declared paths and
+// fulfillment-execution's own MatchPrefix matching semantics — see that
+// repo's ADR-0017.
+func testCatalogue() *pathcatalog.Catalogue {
+	return pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
+		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
+		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+	})
+}
 
 // fulfillmentFixture wires just enough of the real stack (in-memory repos,
 // the existing EnqueueWorkUnit/ReleaseNextWork/RecordCompletion use cases) to
@@ -38,6 +53,7 @@ func newFulfillmentFixture() fulfillmentFixture {
 		consumer: &Consumer{
 			recordCompletion: recordCompletion,
 			processed:        processed,
+			catalogue:        testCatalogue(),
 		},
 	}.withReleasedUnit(pools, publisher, clock, workUnits)
 }
@@ -159,6 +175,7 @@ func newOrderManagementFixture() orderManagementFixture {
 		consumer: &Consumer{
 			enqueueWorkUnit: enqueueWorkUnit,
 			processed:       processed,
+			catalogue:       testCatalogue(),
 		},
 	}
 }
@@ -275,4 +292,135 @@ func mustPathId(t *testing.T, value string) shared.PathId {
 		t.Fatalf("NewPathId: %v", err)
 	}
 	return pathId
+}
+
+// The core behavior change the process-path catalogue introduces here:
+// an order-management line referencing a path_id no declared path family
+// recognizes is rejected outright, and creates zero work units — not
+// silently accepted into a WorkPool nothing downstream will ever
+// service. See fulfillment-execution's ADR-0017.
+func TestHandleOrderManagementEvent_UnknownPathId_ReturnsError(t *testing.T) {
+	f := newOrderManagementFixture()
+	lines := []orderLineData{{LineNo: 1, SKU: "SKU-1", PathId: "not-a-real-path", GiftWrap: false}}
+	env := orderAllocatedEnvelope(t, "evt-unknown", envelope.EventTypeOrderAllocated, "order-unknown", lines)
+
+	err := f.consumer.handleOrderManagementEvent(context.Background(), env)
+	if !errors.Is(err, pathcatalog.ErrUnknownPath) {
+		t.Fatalf("expected ErrUnknownPath, got %v", err)
+	}
+	if _, err := f.workUnits.FindById(context.Background(), "order-unknown-line-1"); err == nil {
+		t.Fatalf("expected no work unit to be enqueued for an unrecognized path_id")
+	}
+}
+
+// Real fleet path_id forms (order-management's default "pick", zone/
+// station-qualified variants) must all resolve — the catalogue's
+// MatchPrefix family matching, not an exact-match lookup. This is the
+// exact regression class fulfillment-execution's ADR-0017 addendum
+// documents; this service's own catalogue mirror must not repeat it.
+func TestHandleOrderManagementEvent_ResolvesRealFleetPathIdVariants(t *testing.T) {
+	f := newOrderManagementFixture()
+	lines := []orderLineData{
+		{LineNo: 1, SKU: "SKU-1", PathId: "pick"},
+		{LineNo: 2, SKU: "SKU-2", PathId: "pick-zone-a"},
+		{LineNo: 3, SKU: "SKU-3", PathId: "pack-soak"},
+	}
+	env := orderAllocatedEnvelope(t, "evt-variants", envelope.EventTypeOrderAllocated, "order-variants", lines)
+
+	if err := f.consumer.handleOrderManagementEvent(context.Background(), env); err != nil {
+		t.Fatalf("unexpected error resolving real-world path_id variants: %v", err)
+	}
+	for _, id := range []string{"order-variants-line-1", "order-variants-line-2", "order-variants-line-3"} {
+		if _, err := f.workUnits.FindById(context.Background(), id); err != nil {
+			t.Fatalf("FindById %s: %v", id, err)
+		}
+	}
+}
+
+// workforceFixture wires just enough of the real stack (in-memory
+// labor-plan-view repo, the existing ObserveLaborPlan use case) to
+// exercise handleWorkforceEvent without touching a broker.
+type workforceFixture struct {
+	laborPlanViews *memory.LaborPlanViewRepo
+	consumer       *Consumer
+}
+
+func newWorkforceFixture() workforceFixture {
+	laborPlanViews := memory.NewLaborPlanViewRepo()
+	processed := memory.NewProcessedEventRepo()
+	observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processed)
+
+	return workforceFixture{
+		laborPlanViews: laborPlanViews,
+		consumer: &Consumer{
+			observeLabor: observeLabor,
+			catalogue:    testCatalogue(),
+		},
+	}
+}
+
+func shiftPlanCommittedEnvelope(t *testing.T, eventId, pathId string) envelope.Envelope {
+	t.Helper()
+	data, err := json.Marshal(shiftPlanCommittedData{
+		BuildingId:   "wh1",
+		ShiftId:      "shift-1",
+		PathId:       pathId,
+		PlannedHeads: 4,
+		PlannedRate:  90,
+		PlannedHours: 8,
+	})
+	if err != nil {
+		t.Fatalf("marshal data: %v", err)
+	}
+	return envelope.Envelope{
+		EventId:    eventId,
+		EventType:  envelope.EventTypeShiftPlanCommitted,
+		OccurredAt: time.Date(2026, 8, 21, 9, 0, 0, 0, time.UTC),
+		Source:     "workforce-management",
+		Data:       data,
+	}
+}
+
+func TestHandleWorkforceEvent_ObservesLaborPlanForARecognizedPath(t *testing.T) {
+	f := newWorkforceFixture()
+	env := shiftPlanCommittedEnvelope(t, "evt-shift-1", "pick-zone-a")
+
+	if err := f.consumer.handleWorkforceEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleWorkforceEvent: %v", err)
+	}
+
+	view, err := f.laborPlanViews.FindByPathId(context.Background(), mustPathId(t, "pick-zone-a"))
+	if err != nil {
+		t.Fatalf("FindByPathId: %v", err)
+	}
+	if view.PlannedHeads != 4 {
+		t.Fatalf("expected PlannedHeads 4, got %d", view.PlannedHeads)
+	}
+}
+
+// The same catalogue-validation contract as the order-management path:
+// an unrecognized path_id on ShiftPlanCommitted is rejected, not
+// silently accepted into a labor-plan-view nothing will ever route real
+// work through.
+func TestHandleWorkforceEvent_UnknownPathId_ReturnsError(t *testing.T) {
+	f := newWorkforceFixture()
+	env := shiftPlanCommittedEnvelope(t, "evt-shift-unknown", "not-a-real-path")
+
+	err := f.consumer.handleWorkforceEvent(context.Background(), env)
+	if !errors.Is(err, pathcatalog.ErrUnknownPath) {
+		t.Fatalf("expected ErrUnknownPath, got %v", err)
+	}
+}
+
+func TestHandleWorkforceEvent_IgnoresOtherEventTypes(t *testing.T) {
+	f := newWorkforceFixture()
+	env := shiftPlanCommittedEnvelope(t, "evt-shift-other", "pick-zone-a")
+	env.EventType = "SomethingElse"
+
+	if err := f.consumer.handleWorkforceEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleWorkforceEvent: %v", err)
+	}
+	if _, err := f.laborPlanViews.FindByPathId(context.Background(), mustPathId(t, "pick-zone-a")); err == nil {
+		t.Fatalf("expected no labor plan view to be observed for an unrelated event type")
+	}
 }
