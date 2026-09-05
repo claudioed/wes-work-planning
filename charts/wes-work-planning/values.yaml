@@ -101,6 +101,24 @@ otel:
 # Extra environment variables appended verbatim (name/value or name/valueFrom).
 extraEnv: []
 
+# ---------------------------------------------------------------------------
+# Process-path catalogue (ADR-0012 here / ADR-0017 in fulfillment-execution):
+# a boot-time-required file this binary reads via PATH_CATALOGUE_FILE.
+# warehouse-infra owns the canonical content (config/process-paths/*.yaml is
+# the fleet's published-language source of truth, shared verbatim with
+# fulfillment-execution and workforce-management) -- this chart just knows
+# how to mount whatever content it's given.
+# ---------------------------------------------------------------------------
+pathCatalogue:
+  enabled: true
+  mountPath: "/etc/wes-work-planning"
+  # Raw YAML content of the catalogue file (e.g. via --set-file or a
+  # values.yaml `content: |` block). Ignored when existingConfigMap is set.
+  content: ""
+  # Name of a pre-existing ConfigMap with a "process-paths.yaml" data key.
+  # When set, content above is ignored and no ConfigMap is created here.
+  existingConfigMap: ""
+
 livenessProbe:
   httpGet:
     path: /healthz
