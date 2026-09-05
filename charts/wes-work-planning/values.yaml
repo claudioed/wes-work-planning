@@ -47,6 +47,22 @@ ingress:
           pathType: Prefix
   tls: []
 
+# Gateway API (HTTPRoute) as an additive, disabled-by-default alternative to
+# the Ingress above. Chart-driven mirror of the shape verified live in
+# warehouse-infra's fulfillment-execution Gateway API pilot. Flip
+# gatewayApi.enabled to true (leaving ingress.enabled as-is or false) to
+# route via Kong's Gateway API implementation instead of Ingress.
+gatewayApi:
+  enabled: false
+  parentRefs:
+    - name: ""
+      namespace: ""
+      sectionName: "http"
+  hosts:
+    - path: /
+      pathType: PathPrefix
+  stripPath: true
+
 resources:
   limits:
     cpu: 500m
