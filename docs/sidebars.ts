@@ -96,6 +96,7 @@ const sidebars: SidebarsConfig = {
         'adr/0010-gift-wrap-as-a-work-released-characteristic',
         'adr/0011-analytical-data-product',
         'adr/0012-process-path-catalogue-validation',
+        'adr/0013-standard-metrics-convention',
       ],
     },
   ],
