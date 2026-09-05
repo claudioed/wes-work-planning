@@ -488,6 +488,71 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /work-units:
+    get:
+      operationId: getWorkUnitsByReference
+      summary: Look up work units by their external order-line reference
+      description: >
+        Returns every `WorkUnit` ever enqueued for the given `reference` —
+        the GetWorkUnitsByReference use case. `reference` is the external
+        reference threaded through `POST /paths/{pathId}/work-units`
+        (typically an order line), NOT this service's internal
+        client-supplied `workUnitId`. A reference can plausibly correspond
+        to more than one `WorkUnit` across retries/history (e.g. re-enqueued
+        after an abandoned attempt) — the response is always an array, even
+        when a caller expects at most one live unit, and is empty (not
+        `404`) when the reference has never been seen. This is the
+        cross-service lookup a console screen uses to answer "what work did
+        this service release for order X, line N".
+      tags: [Work Units]
+      parameters:
+        - name: reference
+          in: query
+          required: true
+          description: >
+            The external order-line reference to look up (as supplied on
+            `EnqueueWorkUnitRequest.reference`). Missing or empty returns
+            `400`.
+          schema:
+            type: string
+            minLength: 1
+          example: order-77213-line-1
+      responses:
+        "200":
+          description: >
+            Every work unit found for this reference, oldest-first history
+            included. An empty array when nothing matches.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WorkUnitResponse"
+              example:
+                - id: wu-482910
+                  pathId: pick-a
+                  cpt: "2026-08-21T12:00:00Z"
+                  reference: order-77213-line-1
+                  state: Completed
+                  giftWrap: false
+                  sku: sku-482910
+                  releasedAt: "2026-08-21T09:00:00Z"
+                  completedAt: "2026-08-21T10:00:00Z"
+        "400":
+          description: The `reference` query parameter was missing or empty.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.wes-work-planning.warehouse-systems.dev/reference-required
+                title: Reference query parameter is required
+                status: 400
+                detail: "reference query parameter is required"
+                instance: /work-units
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /work-units/{id}/complete:
     post:
       operationId: recordCompletion
@@ -882,6 +947,27 @@ components:
             package for this work unit (see ADR-0010). False when not
             requested.
           example: false
+        sku:
+          type: string
+          description: >-
+            OPTIONAL inventory SKU this work unit's order line corresponds
+            to. Omitted when not known — not every caller supplies one (see
+            EnqueueWorkUnitRequest.sku).
+          example: sku-482910
+        releasedAt:
+          type: string
+          format: date-time
+          description: >-
+            When this work unit was released (Pending → Released). Omitted
+            while still Pending.
+          example: "2026-08-21T09:00:00Z"
+        completedAt:
+          type: string
+          format: date-time
+          description: >-
+            When this work unit was completed (Released → Completed).
+            Omitted until completed.
+          example: "2026-08-21T10:00:00Z"
       required: [id, pathId, cpt, reference, state, giftWrap]
 
     PoolMode:

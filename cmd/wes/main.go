@@ -17,6 +17,7 @@ import (
 	inboundhttp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/inbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/filecatalog"
 	outboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/outbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
@@ -46,6 +47,18 @@ func run() error {
 	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
 	eventPublisherKind := getenv("EVENT_PUBLISHER", "log")
 	otelServiceName := getenv("OTEL_SERVICE_NAME", serviceName)
+
+	// The process-path catalogue is loaded and validated once at boot,
+	// before anything else stands up — a missing or malformed catalogue
+	// file must stop this service from starting at all, never fall back
+	// to a partial/empty catalogue (mirrors fulfillment-execution's
+	// identical boot-time contract; see ADR-0017 there and this
+	// service's own ADR-0012).
+	catalogue, err := filecatalog.Load(getenv("PATH_CATALOGUE_FILE", "/etc/wes-work-planning/process-paths.yaml"))
+	if err != nil {
+		return fmt.Errorf("failed to load the process-path catalogue: %w", err)
+	}
+	logger.Info("process-path catalogue loaded", "paths", catalogue.Ids())
 
 	shutdownTelemetry, err := telemetry.Setup(
 		context.Background(),
@@ -132,19 +145,21 @@ func run() error {
 		publisher = events.NewLogPublisher(logger)
 	}
 
-	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+	recordCompletion := usecases.NewRecordCompletion(workUnits, pools, publisher, clock)
 	enqueueWorkUnit := usecases.NewEnqueueWorkUnit(workUnits, pools, publisher, clock)
 
 	handlers := &inboundhttp.Handlers{
-		ReceiveChargeForecast: usecases.NewReceiveChargeForecast(charges, publisher, clock),
-		CommitShiftPlan:       usecases.NewCommitShiftPlan(plans, publisher, clock),
-		EnqueueWorkUnit:       enqueueWorkUnit,
-		ReleaseNextWork:       usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
-		RecordCompletion:      recordCompletion,
-		SampleBacklog:         usecases.NewSampleBacklog(pools, publisher, clock),
-		RebalanceDecision:     usecases.NewRebalanceDecision(pools, publisher, clock),
-		LaborPlanView:         usecases.NewLaborPlanView(laborPlanViews),
-		InventoryView:         usecases.NewInventoryView(inventoryViews),
+		ReceiveChargeForecast:   usecases.NewReceiveChargeForecast(charges, publisher, clock),
+		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock),
+		EnqueueWorkUnit:         enqueueWorkUnit,
+		ReleaseNextWork:         usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
+		RecordCompletion:        recordCompletion,
+		SampleBacklog:           usecases.NewSampleBacklog(pools, publisher, clock),
+		RebalanceDecision:       usecases.NewRebalanceDecision(pools, publisher, clock),
+		Catalogue:               catalogue,
+		LaborPlanView:           usecases.NewLaborPlanView(laborPlanViews),
+		InventoryView:           usecases.NewInventoryView(inventoryViews),
+		GetWorkUnitsByReference: usecases.NewGetWorkUnitsByReference(workUnits),
 	}
 
 	router := inboundhttp.NewRouter(handlers, otelServiceName, logger)
@@ -171,7 +186,7 @@ func run() error {
 		logger.Info("consuming integration events", "brokers", kafkaBrokers)
 		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
 		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
-		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, logger)
+		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, catalogue, logger)
 		go func() {
 			if err := consumer.Run(consumerCtx); err != nil {
 				logger.Error("kafka consumer stopped", "error", err)

@@ -271,7 +271,7 @@ func TestRecordCompletion_RejectsDoubleComplete(t *testing.T) {
 	f := newFixture()
 	enqueue := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
 	releaseUC := usecases.NewReleaseNextWork(f.pools, f.workUnits, f.publisher, f.clock)
-	complete := usecases.NewRecordCompletion(f.workUnits, f.publisher, f.clock)
+	complete := usecases.NewRecordCompletion(f.workUnits, f.pools, f.publisher, f.clock)
 	pathId, _ := shared.NewPathId("pick-a")
 	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
 
@@ -288,6 +288,60 @@ func TestRecordCompletion_RejectsDoubleComplete(t *testing.T) {
 	}
 	if _, err := complete.Execute(ctx, usecases.RecordCompletionRequest{WorkUnitId: "wu-1"}); !errors.Is(err, workunit.ErrAlreadyCompleted) {
 		t.Fatalf("got err %v, want %v", err, workunit.ErrAlreadyCompleted)
+	}
+}
+
+// TestRecordCompletion_FreesWorkPoolWIPSlot is the end-to-end regression
+// test (through the wired use case, not just the domain aggregate) for the
+// soak-scenario bug: RecordCompletion must free the completed unit's WIP
+// slot on its release-fed work pool, or every subsequent ReleaseNextWork
+// call on that path 409s forever once the pool's lifetime-released count
+// reaches its WIP limit -- regardless of how much of that work has since
+// finished.
+func TestRecordCompletion_FreesWorkPoolWIPSlot(t *testing.T) {
+	f := newFixture()
+	enqueue := usecases.NewEnqueueWorkUnit(f.workUnits, f.pools, f.publisher, f.clock)
+	releaseUC := usecases.NewReleaseNextWork(f.pools, f.workUnits, f.publisher, f.clock)
+	complete := usecases.NewRecordCompletion(f.workUnits, f.pools, f.publisher, f.clock)
+	pathId, _ := shared.NewPathId("pick-wip-1")
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	ctx := context.Background()
+
+	// A release-fed pool with WIP limit 1: only one outstanding release
+	// allowed at a time.
+	pool := release.NewWorkPool(pathId, release.ReleaseFed, 1, 0)
+	if err := f.pools.Save(ctx, pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := enqueue.Execute(ctx, usecases.EnqueueWorkUnitRequest{WorkUnitId: "wu-1", PathId: pathId, CPT: cpt, Reference: "ref-1"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := enqueue.Execute(ctx, usecases.EnqueueWorkUnitRequest{WorkUnitId: "wu-2", PathId: pathId, CPT: cpt, Reference: "ref-2"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := releaseUC.Execute(ctx, usecases.ReleaseNextWorkRequest{PathId: pathId}); err != nil {
+		t.Fatalf("unexpected error releasing wu-1: %v", err)
+	}
+
+	// At the WIP limit: releasing again must 409 (ErrWIPLimitReached) --
+	// this is the state the soak scenario got permanently stuck in.
+	if _, err := releaseUC.Execute(ctx, usecases.ReleaseNextWorkRequest{PathId: pathId}); !errors.Is(err, release.ErrWIPLimitReached) {
+		t.Fatalf("got err %v, want %v", err, release.ErrWIPLimitReached)
+	}
+
+	if _, err := complete.Execute(ctx, usecases.RecordCompletionRequest{WorkUnitId: "wu-1"}); err != nil {
+		t.Fatalf("unexpected error completing wu-1: %v", err)
+	}
+
+	// The slot RecordCompletion just freed must admit wu-2.
+	released, err := releaseUC.Execute(ctx, usecases.ReleaseNextWorkRequest{PathId: pathId})
+	if err != nil {
+		t.Fatalf("expected the freed WIP slot to admit wu-2, got error: %v", err)
+	}
+	if released.Id() != "wu-2" {
+		t.Fatalf("got %q, want wu-2", released.Id())
 	}
 }
 

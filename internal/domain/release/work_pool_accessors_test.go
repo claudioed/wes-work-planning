@@ -81,6 +81,27 @@ func TestWorkPool_Entries(t *testing.T) {
 	if entries[1].Released {
 		t.Fatalf("got %+v, want wu-2 still pending", entries[1])
 	}
+
+	// A Completed entry must still report Released == true (the postgres
+	// repo's FindByPathId rehydrates a "completed" DB row by calling
+	// wp.Release() then wp.Complete(), keyed off exactly this flag) as
+	// well as Completed == true itself. Regression coverage for the
+	// entry-state snapshot's OR condition, not just the plain-released
+	// case above.
+	if err := pool.Complete("wu-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entries = pool.Entries()
+	if !entries[0].Released {
+		t.Fatalf("got %+v, want wu-1 still reported Released after Complete", entries[0])
+	}
+	if !entries[0].Completed {
+		t.Fatalf("got %+v, want wu-1 Completed", entries[0])
+	}
+	if entries[1].Released || entries[1].Completed {
+		t.Fatalf("got %+v, want wu-2 still pending (untouched)", entries[1])
+	}
 }
 
 func TestWorkPool_Release_WIPLimitInvariant_ReleaseFed(t *testing.T) {

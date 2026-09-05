@@ -46,3 +46,19 @@ func (r *WorkUnitRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (
 	}
 	return out, nil
 }
+
+// FindByReference returns every WorkUnit carrying the given external
+// reference. A reference can plausibly match more than one WorkUnit across
+// retries/history, so this returns a slice; an empty slice (not an error)
+// when nothing matches.
+func (r *WorkUnitRepo) FindByReference(ctx context.Context, reference string) ([]*workunit.WorkUnit, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*workunit.WorkUnit
+	for _, u := range r.byId {
+		if u.Reference() == reference {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}

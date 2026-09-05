@@ -54,6 +54,12 @@ const sidebar: SidebarsConfig = {
         },
         {
           type: "doc",
+          id: "api/rest/get-work-units-by-reference",
+          label: "Look up work units by their external order-line reference",
+          className: "api-method get",
+        },
+        {
+          type: "doc",
           id: "api/rest/record-completion",
           label: "Record completion of a released work unit",
           className: "api-method post",

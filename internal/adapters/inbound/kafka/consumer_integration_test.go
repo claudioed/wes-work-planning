@@ -19,6 +19,7 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
 )
@@ -37,7 +38,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	}
 	brokers := strings.Split(brokersCSV, ",")
 
-	pathIdValue := fmt.Sprintf("integration-kafka-pick-%d", time.Now().UnixNano())
+	pathIdValue := fmt.Sprintf("pick-integration-kafka-%d", time.Now().UnixNano())
 	sku := fmt.Sprintf("integration-kafka-sku-%d", time.Now().UnixNano())
 	workUnitIdValue := fmt.Sprintf("integration-kafka-wu-%d", time.Now().UnixNano())
 
@@ -118,10 +119,15 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	processed := memory.NewProcessedEventRepo()
 	observeLabor := usecases.NewObserveLaborPlan(laborViews, processed)
 	observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processed)
-	recordCompletion := usecases.NewRecordCompletion(workUnits, publisher, clock)
+	recordCompletion := usecases.NewRecordCompletion(workUnits, pools, publisher, clock)
 
 	groupID := fmt.Sprintf("wes-integration-test-%d", time.Now().UnixNano())
-	consumer := inboundkafka.NewConsumer(brokers, groupID, observeLabor, observeInventory, recordCompletion, enqueue, processed, nil)
+	// The catalogue only needs a "pick" family declared: every path_id
+	// this test publishes is pick-prefixed (see pathIdValue above).
+	catalogue := pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+	})
+	consumer := inboundkafka.NewConsumer(brokers, groupID, observeLabor, observeInventory, recordCompletion, enqueue, processed, catalogue, nil)
 	defer consumer.Close()
 
 	consumeCtx, cancel := context.WithCancel(context.Background())

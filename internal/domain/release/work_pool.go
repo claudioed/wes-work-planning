@@ -17,6 +17,7 @@ type entryState int
 const (
 	pending entryState = iota
 	released
+	completed
 )
 
 type poolEntry struct {
@@ -54,13 +55,19 @@ type PoolEntrySnapshot struct {
 	WorkUnitId string
 	CPT        shared.CPT
 	Released   bool
+	Completed  bool
 }
 
 // Entries returns a snapshot of every entry currently in the pool.
 func (p *WorkPool) Entries() []PoolEntrySnapshot {
 	out := make([]PoolEntrySnapshot, len(p.entries))
 	for i, e := range p.entries {
-		out[i] = PoolEntrySnapshot{WorkUnitId: e.workUnitId, CPT: e.cpt, Released: e.state == released}
+		out[i] = PoolEntrySnapshot{
+			WorkUnitId: e.workUnitId,
+			CPT:        e.cpt,
+			Released:   e.state == released || e.state == completed,
+			Completed:  e.state == completed,
+		}
 	}
 	return out
 }
@@ -87,7 +94,10 @@ func (p *WorkPool) BacklogDepth() int {
 	return count
 }
 
-// WIP is the count of released (outstanding) entries.
+// WIP is the count of released-but-not-yet-completed (outstanding) entries.
+// A completed entry no longer occupies a WIP slot — see Complete below —
+// so a release-fed pool's admission ceiling reflects live outstanding work,
+// not the lifetime total ever released.
 func (p *WorkPool) WIP() int {
 	count := 0
 	for _, e := range p.entries {
@@ -142,13 +152,38 @@ func (p *WorkPool) Release(workUnitId string) error {
 		if e.workUnitId != workUnitId {
 			continue
 		}
-		if e.state == released {
+		if e.state == released || e.state == completed {
 			return ErrAlreadyReleased
 		}
 		if p.mode == ReleaseFed && p.WIP() >= p.wipLimit {
 			return ErrWIPLimitReached
 		}
 		p.entries[i].state = released
+		return nil
+	}
+	return ErrUnknownEntry
+}
+
+// Complete marks a released entry as completed, freeing its WIP slot on a
+// release-fed pool. This is the missing half of the release/complete cycle:
+// without it, a release-fed pool's WIP count only ever rises (each entry is
+// released at most once and never leaves WIP), so the pool permanently
+// wedges shut once wipLimit entries have EVER been released — regardless of
+// how much of that work downstream has since finished. Idempotent: calling
+// Complete twice on an already-completed entry is a no-op success, since a
+// redelivered TaskCompleted event must not error the consumer.
+func (p *WorkPool) Complete(workUnitId string) error {
+	for i, e := range p.entries {
+		if e.workUnitId != workUnitId {
+			continue
+		}
+		if e.state == completed {
+			return nil
+		}
+		if e.state != released {
+			return ErrNotReleased
+		}
+		p.entries[i].state = completed
 		return nil
 	}
 	return ErrUnknownEntry

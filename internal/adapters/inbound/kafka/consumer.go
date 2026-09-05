@@ -22,6 +22,7 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
+	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/release"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
@@ -88,10 +89,11 @@ type Consumer struct {
 	recordCompletion      *usecases.RecordCompletion
 	enqueueWorkUnit       *usecases.EnqueueWorkUnit
 	processed             ports.ProcessedEventRepo
+	catalogue             *pathcatalog.Catalogue
 	logger                *slog.Logger
 }
 
-func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, enqueueWorkUnit *usecases.EnqueueWorkUnit, processed ports.ProcessedEventRepo, logger *slog.Logger) *Consumer {
+func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, enqueueWorkUnit *usecases.EnqueueWorkUnit, processed ports.ProcessedEventRepo, catalogue *pathcatalog.Catalogue, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		workforceReader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
@@ -118,6 +120,7 @@ func NewConsumer(brokers []string, groupID string, observeLabor *usecases.Observ
 		recordCompletion: recordCompletion,
 		enqueueWorkUnit:  enqueueWorkUnit,
 		processed:        processed,
+		catalogue:        catalogue,
 		logger:           logger,
 	}
 }
@@ -225,6 +228,18 @@ func (c *Consumer) handleWorkforceEvent(ctx context.Context, env envelope.Envelo
 	if err != nil {
 		return err
 	}
+	// Validate against the declared process-path catalogue: a
+	// ShiftPlanCommitted for a path_id no declared path family
+	// recognizes is rejected outright rather than silently accepted
+	// into a labor-plan-view nothing else will ever route real work
+	// through. This is validation only — the WorkPool/labor-plan-view
+	// key stays the original granular pathId (e.g. "pick-zone-a"), not
+	// the catalogue's coarser family id, since each zone/station is a
+	// genuinely distinct queue. See fulfillment-execution's ADR-0017
+	// for the full catalogue rationale.
+	if _, err := c.catalogue.Lookup(pathId.String()); err != nil {
+		return err
+	}
 
 	return c.observeLabor.Execute(ctx, usecases.ObserveLaborPlanRequest{
 		EventId:      env.EventId,
@@ -324,6 +339,16 @@ func (c *Consumer) handleOrderManagementEvent(ctx context.Context, env envelope.
 	for _, line := range data.Lines {
 		pathId, err := shared.NewPathId(line.PathId)
 		if err != nil {
+			return err
+		}
+		// Validate against the declared process-path catalogue before
+		// ever creating a WorkPool for this pathId: an unrecognized
+		// path_id from order-management (e.g. a typo or a stale
+		// deploy referencing a path that was retired) must fail loud
+		// here rather than silently seed a real WorkPool queue nothing
+		// downstream will ever service. See fulfillment-execution's
+		// ADR-0017 for the full catalogue rationale.
+		if _, err := c.catalogue.Lookup(pathId.String()); err != nil {
 			return err
 		}
 

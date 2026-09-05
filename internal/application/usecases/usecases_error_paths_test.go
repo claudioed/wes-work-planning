@@ -146,7 +146,7 @@ func TestReceiveChargeForecast_NoBuckets(t *testing.T) {
 
 func TestRecordCompletion_UnknownWorkUnit(t *testing.T) {
 	f := newFixture()
-	uc := usecases.NewRecordCompletion(f.workUnits, f.publisher, f.clock)
+	uc := usecases.NewRecordCompletion(f.workUnits, f.pools, f.publisher, f.clock)
 
 	_, err := uc.Execute(context.Background(), usecases.RecordCompletionRequest{WorkUnitId: "does-not-exist"})
 	if !errors.Is(err, ports.ErrNotFound) {
@@ -619,7 +619,7 @@ func TestRecordCompletion_SaveError(t *testing.T) {
 
 	wantErr := errors.New("work unit store unavailable")
 	repo := saveErrWorkUnitRepo{WorkUnitRepo: f.workUnits, err: wantErr}
-	uc := usecases.NewRecordCompletion(repo, f.publisher, f.clock)
+	uc := usecases.NewRecordCompletion(repo, f.pools, f.publisher, f.clock)
 
 	_, err = uc.Execute(context.Background(), usecases.RecordCompletionRequest{WorkUnitId: "wu-1"})
 	if !errors.Is(err, wantErr) {
@@ -643,7 +643,7 @@ func TestRecordCompletion_PublishError(t *testing.T) {
 	}
 
 	wantErr := errors.New("broker unavailable")
-	uc := usecases.NewRecordCompletion(f.workUnits, erroringEventPublisher{err: wantErr}, f.clock)
+	uc := usecases.NewRecordCompletion(f.workUnits, f.pools, erroringEventPublisher{err: wantErr}, f.clock)
 
 	_, err = uc.Execute(context.Background(), usecases.RecordCompletionRequest{WorkUnitId: "wu-1"})
 	if !errors.Is(err, wantErr) {

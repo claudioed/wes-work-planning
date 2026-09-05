@@ -46,6 +46,7 @@ no scheduler).
 | [0009](./0009-product-classification-propagation-to-work-released.md) | Propagate inventory-storage's `ProductClassification` onto `WorkReleased` via a synchronous read at release time | Accepted |
 | [0010](./0010-gift-wrap-as-a-work-released-characteristic.md) | Gift wrap as a caller-stated `WorkReleased` characteristic, not a product attribute | Accepted |
 | [0011](./0011-analytical-data-product.md) | Per-service analytical data product (report) via a separate analytics topic | Accepted |
+| [0012](./0012-process-path-catalogue-validation.md) | Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017 | Accepted |
 
 ## The template
 

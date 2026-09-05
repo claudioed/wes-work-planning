@@ -113,3 +113,38 @@ func (r *WorkUnitRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (
 
 	return out, nil
 }
+
+// FindByReference returns every WorkUnit carrying the given external
+// reference (e.g. an order line). A reference can plausibly have more than
+// one WorkUnit across retries/history, so this returns a slice; an empty
+// slice (not ports.ErrNotFound) when nothing matches.
+func (r *WorkUnitRepo) FindByReference(ctx context.Context, reference string) ([]*workunit.WorkUnit, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, path_id, cpt, sku, state, released_at, completed_at
+		FROM work_units WHERE reference = $1
+	`, reference)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*workunit.WorkUnit
+	for rows.Next() {
+		var id, pathIdStr, sku, state string
+		var cpt time.Time
+		var releasedAt, completedAt *time.Time
+		if err := rows.Scan(&id, &pathIdStr, &cpt, &sku, &state, &releasedAt, &completedAt); err != nil {
+			return nil, err
+		}
+		unit, err := r.scanWorkUnit(id, pathIdStr, reference, sku, state, cpt, releasedAt, completedAt)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, unit)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}

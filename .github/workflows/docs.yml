@@ -2,7 +2,13 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ["docs/**", ".github/workflows/docs.yml"]
+    # apis/openapi.yaml drives docusaurus-plugin-openapi-docs' generated
+    # "API Reference -> REST API" pages (docs/docs/api/rest/, built by the
+    # `prebuild` npm script). Without apis/** here, a spec-only change never
+    # triggers a rebuild/redeploy and the published API Reference silently
+    # goes stale relative to apis/openapi.yaml. See ci.yml's docs-api-drift
+    # job for the PR-time guard that catches the same drift before merge.
+    paths: ["docs/**", "apis/openapi.yaml", ".github/workflows/docs.yml"]
   workflow_dispatch: {}
 
 permissions:
@@ -29,7 +35,7 @@ jobs:
           cache-dependency-path: docs/package-lock.json
       - run: npm ci
       - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/build
 
@@ -40,5 +46,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5
         id: deployment
