@@ -45,6 +45,7 @@ func run() error {
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	databaseURL := os.Getenv("DATABASE_URL")
+	migrationsPath := getenv("MIGRATIONS_PATH", "migrations")
 	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
 	eventPublisherKind := getenv("EVENT_PUBLISHER", "log")
 	otelServiceName := getenv("OTEL_SERVICE_NAME", serviceName)
@@ -154,6 +155,18 @@ func run() error {
 		inventoryViews = memory.NewInventoryViewRepo()
 		processedEvts = memory.NewProcessedEventRepo()
 	} else {
+		// The OLTP schema is a precondition this process enforces itself,
+		// rather than assuming an out-of-band golang-migrate CLI step ran.
+		// That assumption silently did not hold: the service deployed
+		// cleanly against an empty database and every Postgres-backed
+		// endpoint failed at request time with
+		// `relation "charge_forecasts" does not exist`. Migrating before
+		// the pool is opened matches what fulfillment-execution's and
+		// workforce-management's OLTP binaries already do.
+		if err := postgres.Migrate(databaseURL, migrationsPath); err != nil {
+			return err
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
