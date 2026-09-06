@@ -22,7 +22,6 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
-	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/release"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 )
@@ -89,11 +88,11 @@ type Consumer struct {
 	recordCompletion      *usecases.RecordCompletion
 	enqueueWorkUnit       *usecases.EnqueueWorkUnit
 	processed             ports.ProcessedEventRepo
-	catalogue             *pathcatalog.Catalogue
+	catalogue             ports.PathCatalogue
 	logger                *slog.Logger
 }
 
-func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, enqueueWorkUnit *usecases.EnqueueWorkUnit, processed ports.ProcessedEventRepo, catalogue *pathcatalog.Catalogue, logger *slog.Logger) *Consumer {
+func NewConsumer(brokers []string, groupID string, observeLabor *usecases.ObserveLaborPlan, observeInventory *usecases.ObserveInventoryChange, recordCompletion *usecases.RecordCompletion, enqueueWorkUnit *usecases.EnqueueWorkUnit, processed ports.ProcessedEventRepo, catalogue ports.PathCatalogue, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		workforceReader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
