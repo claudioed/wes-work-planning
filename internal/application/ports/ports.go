@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/claudioed/wes-work-planning/internal/domain/charge"
+	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/plan"
 	"github.com/claudioed/wes-work-planning/internal/domain/release"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
@@ -56,4 +57,14 @@ type EventPublisher interface {
 // Clock abstracts "now" so use cases and tests are deterministic.
 type Clock interface {
 	Now() time.Time
+}
+
+// PathCatalogue is the outbound port for the fleet's declared process-path
+// catalogue — matches pathcatalog.Catalogue's own Lookup signature exactly,
+// so *pathcatalog.Catalogue already satisfies this interface with no
+// changes. Introduced so an alternative adapter (e.g. a Kafka-sourced
+// catalogue, see internal/adapters/outbound/kafkacatalog) can be wired in
+// wherever a *pathcatalog.Catalogue was previously required directly.
+type PathCatalogue interface {
+	Lookup(id string) (pathcatalog.PathDefinition, error)
 }

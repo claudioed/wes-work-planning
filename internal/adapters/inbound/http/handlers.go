@@ -12,7 +12,6 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 	"github.com/claudioed/wes-work-planning/internal/domain/charge"
 	"github.com/claudioed/wes-work-planning/internal/domain/laborview"
-	"github.com/claudioed/wes-work-planning/internal/domain/pathcatalog"
 	"github.com/claudioed/wes-work-planning/internal/domain/plan"
 	"github.com/claudioed/wes-work-planning/internal/domain/shared"
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
@@ -34,8 +33,11 @@ type Handlers struct {
 	// fulfillment-execution's ADR-0017. A nil Catalogue (only ever the
 	// case in older tests not yet updated) skips validation rather than
 	// panicking, so this is additive, not a required wiring change for
-	// every caller.
-	Catalogue *pathcatalog.Catalogue
+	// every caller. ports.PathCatalogue (not the concrete
+	// *pathcatalog.Catalogue) so an alternative source (e.g. a
+	// Kafka-fed catalogue) can be wired in without touching this
+	// struct.
+	Catalogue ports.PathCatalogue
 
 	// Additive: cross-service integration read models (Task 7).
 	LaborPlanView *usecases.LaborPlanView
