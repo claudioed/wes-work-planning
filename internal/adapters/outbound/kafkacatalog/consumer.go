@@ -116,18 +116,25 @@ type targetOffsets map[int]int64
 // See the package doc comment for why the group must never be a fixed
 // shared name.
 func NewConsumer(ctx context.Context, brokers []string, logger *slog.Logger) (*Consumer, error) {
+	return NewConsumerForTopic(ctx, brokers, Topic, logger)
+}
+
+// NewConsumerForTopic constructs the same full-replay consumer as NewConsumer,
+// but against an explicit topic. It lets integration tests exercise production
+// replay/readiness behavior against an isolated throwaway topic.
+func NewConsumerForTopic(ctx context.Context, brokers []string, topic string, logger *slog.Logger) (*Consumer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	target, err := newTargetOffsets(ctx, brokers, Topic)
+	target, err := newTargetOffsets(ctx, brokers, topic)
 	if err != nil {
 		return nil, fmt.Errorf("kafkacatalog: determine readiness target: %w", err)
 	}
 
 	reader := kafkago.NewReader(kafkago.ReaderConfig{
 		Brokers:     brokers,
-		Topic:       Topic,
+		Topic:       topic,
 		GroupID:     uniqueConsumerGroup(),
 		StartOffset: kafkago.FirstOffset,
 	})
