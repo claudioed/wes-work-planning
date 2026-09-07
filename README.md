@@ -125,6 +125,28 @@ The MCP server (`cmd/mcp`) exposes the read-only `get_release_throughput_report`
 tool when `REPORTS_BASE_URL` (e.g. `http://localhost:8092`) is set; it calls the
 reports REST rather than opening the analytical database.
 
+### Running the MCP server in Kubernetes
+
+The MCP server ([ADR-0008](docs/docs/adr/0008-mcp-inbound-adapter.md)) ships in
+the same image as the OLTP service (`/app/mcp`, built from `cmd/mcp`) and is
+deployed by the Helm chart as a separate Deployment + ClusterIP Service
+(`<release>-mcp`, port `8090`) when `mcp.enabled=true`. It is **off by default**.
+The binary reuses the OLTP `DATABASE_URL` secret, reads its bearer keys from a
+chart-managed Secret (`mcp.readKey` → `MCP_READ_KEY`, `mcp.readWriteKey` →
+`MCP_READWRITE_KEY`), and — when `analytics.enabled=true` — is pointed at this
+release's reports Service so the report tool is registered. The Streamable HTTP
+endpoint is mounted at both `/` and `/mcp` (warehouse-ops-agent's
+`*_MCP_ENDPOINT` convention is `http://<release>-mcp.<ns>.svc.cluster.local:8090/mcp`);
+`GET /healthz` is unauthenticated and backs the liveness/readiness probes.
+
+```sh
+helm upgrade --install wes charts/wes-work-planning \
+  --set database.url="postgres://..." \
+  --set mcp.enabled=true \
+  --set mcp.readKey="$(openssl rand -hex 20)" \
+  --set mcp.readWriteKey="$(openssl rand -hex 20)"
+```
+
 ### Analytics config
 
 | Env var | Default | Purpose |
