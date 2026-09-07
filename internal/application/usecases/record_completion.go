@@ -24,10 +24,18 @@ type RecordCompletion struct {
 	pools     ports.WorkPoolRepo
 	publisher ports.EventPublisher
 	clock     ports.Clock
+	uow       ports.UnitOfWork
 }
 
 func NewRecordCompletion(workUnits ports.WorkUnitRepo, pools ports.WorkPoolRepo, publisher ports.EventPublisher, clock ports.Clock) *RecordCompletion {
 	return &RecordCompletion{workUnits: workUnits, pools: pools, publisher: publisher, clock: clock}
+}
+
+// WithUnitOfWork brackets both Saves + Publish in one atomic scope
+// (ADR-0014). Optional: nil keeps the calls running back to back.
+func (uc *RecordCompletion) WithUnitOfWork(u ports.UnitOfWork) *RecordCompletion {
+	uc.uow = u
+	return uc
 }
 
 type RecordCompletionRequest struct {
@@ -45,27 +53,31 @@ func (uc *RecordCompletion) Execute(ctx context.Context, req RecordCompletionReq
 		return nil, err
 	}
 
-	if err := uc.workUnits.Save(ctx, unit); err != nil {
-		return nil, err
-	}
-
-	// Free this unit's WIP slot on its work pool. Best-effort against a
-	// pool that predates this fix or was never release-fed for this path
-	// (ErrNotFound): the WorkUnit's own completion above is the source of
-	// truth and must not be rolled back just because the pool side-effect
-	// couldn't be applied.
-	if pool, err := uc.pools.FindByPathId(ctx, unit.PathId()); err == nil {
-		if err := pool.Complete(unit.Id()); err == nil {
-			if err := uc.pools.Save(ctx, pool); err != nil {
-				return nil, err
-			}
-		}
-	} else if err != ports.ErrNotFound {
-		return nil, err
-	}
-
 	event := shared.NewWorkUnitCompleted(unit.Id(), unit.PathId(), now)
-	if err := uc.publisher.Publish(ctx, event); err != nil {
+	err = atomically(ctx, uc.uow, func(ctx context.Context) error {
+		if err := uc.workUnits.Save(ctx, unit); err != nil {
+			return err
+		}
+
+		// Free this unit's WIP slot on its work pool. Best-effort against a
+		// pool that predates this fix or was never release-fed for this path
+		// (ErrNotFound): the WorkUnit's own completion above is the source of
+		// truth and must not be skipped just because the pool side-effect
+		// couldn't be applied. A pool Save FAILURE, though, still fails (and
+		// under a UnitOfWork rolls back) the whole scope.
+		if pool, err := uc.pools.FindByPathId(ctx, unit.PathId()); err == nil {
+			if err := pool.Complete(unit.Id()); err == nil {
+				if err := uc.pools.Save(ctx, pool); err != nil {
+					return err
+				}
+			}
+		} else if err != ports.ErrNotFound {
+			return err
+		}
+
+		return uc.publisher.Publish(ctx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
 

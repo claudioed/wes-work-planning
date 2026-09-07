@@ -197,3 +197,37 @@ analytics:
       requests:
         cpu: 100m
         memory: 128Mi
+
+# --- MCP server (ADR-0008) ---
+# The Model Context Protocol server: a second deployable (cmd/mcp, Streamable
+# HTTP) that runs the same use cases as the OLTP service over the same
+# database. Disabled by default so existing releases are unaffected; set
+# mcp.enabled=true and provide at least mcp.readKey to deploy it. The MCP
+# endpoint is served at both "/" and "/mcp"; "GET /healthz" is unauthenticated
+# for the probes.
+mcp:
+  enabled: false
+  replicaCount: 1
+  httpAddr: ":8090"
+  service:
+    type: ClusterIP
+    port: 8090
+    targetPort: 8090
+  # Static bearer keys (ADR-0008). Read scope grants the read tools; read-write
+  # additionally grants release_next_work. An empty key is not written to the
+  # Secret and that scope is then unobtainable (fail closed).
+  readKey: ""
+  readWriteKey: ""
+  # Base URL of the reports REST service for the get_release_throughput_report
+  # tool. Leave empty to auto-point at this release's reports Service when
+  # analytics.enabled=true (and register no report tool otherwise).
+  reportsBaseUrl: ""
+  # Extra environment variables for the MCP container only.
+  extraEnv: []
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

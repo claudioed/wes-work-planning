@@ -54,6 +54,22 @@ type EventPublisher interface {
 	Publish(ctx context.Context, events ...shared.DomainEvent) error
 }
 
+// UnitOfWork brackets a use case's state change and the domain events it
+// raises so both commit or neither does (ADR-0014, transactional outbox).
+//
+// Execute runs fn inside one atomic scope. Every Repo.Save and
+// EventPublisher.Publish made with the ctx handed to fn is bound to that
+// same scope: if fn returns an error the scope is rolled back and nothing
+// — neither the aggregate rows nor the outbox rows — is visible afterwards.
+//
+// Adapters that have no transactional backing (the in-memory repos, the
+// log publisher, the direct Kafka publishers) need no implementation: the
+// use cases treat a nil UnitOfWork as "run fn directly", so they stay
+// adapter-agnostic either way.
+type UnitOfWork interface {
+	Execute(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
 // Clock abstracts "now" so use cases and tests are deterministic.
 type Clock interface {
 	Now() time.Time

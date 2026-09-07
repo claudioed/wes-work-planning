@@ -23,10 +23,18 @@ type EnqueueWorkUnit struct {
 	pools     ports.WorkPoolRepo
 	publisher ports.EventPublisher
 	clock     ports.Clock
+	uow       ports.UnitOfWork
 }
 
 func NewEnqueueWorkUnit(workUnits ports.WorkUnitRepo, pools ports.WorkPoolRepo, publisher ports.EventPublisher, clock ports.Clock) *EnqueueWorkUnit {
 	return &EnqueueWorkUnit{workUnits: workUnits, pools: pools, publisher: publisher, clock: clock}
+}
+
+// WithUnitOfWork brackets both Saves + Publish in one atomic scope
+// (ADR-0014). Optional: nil keeps the calls running back to back.
+func (uc *EnqueueWorkUnit) WithUnitOfWork(u ports.UnitOfWork) *EnqueueWorkUnit {
+	uc.uow = u
+	return uc
 }
 
 type EnqueueWorkUnitRequest struct {
@@ -70,15 +78,17 @@ func (uc *EnqueueWorkUnit) Execute(ctx context.Context, req EnqueueWorkUnitReque
 		return nil, err
 	}
 
-	if err := uc.workUnits.Save(ctx, unit); err != nil {
-		return nil, err
-	}
-	if err := uc.pools.Save(ctx, pool); err != nil {
-		return nil, err
-	}
-
 	event := shared.NewWorkUnitCreated(unit.Id(), req.PathId, uc.clock.Now())
-	if err := uc.publisher.Publish(ctx, event); err != nil {
+	err = atomically(ctx, uc.uow, func(ctx context.Context) error {
+		if err := uc.workUnits.Save(ctx, unit); err != nil {
+			return err
+		}
+		if err := uc.pools.Save(ctx, pool); err != nil {
+			return err
+		}
+		return uc.publisher.Publish(ctx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
 

@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	inboundmcp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/mcp"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
@@ -122,7 +124,7 @@ func run() error {
 
 	srv := &http.Server{
 		Addr:              httpAddr,
-		Handler:           handler,
+		Handler:           newRouter(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -146,6 +148,33 @@ func run() error {
 		defer cancel()
 		return srv.Shutdown(ctx)
 	}
+}
+
+// newRouter wraps the authenticated MCP handler in the process's HTTP surface:
+//
+//   - GET /healthz answers 200 {"status":"ok"} WITHOUT authentication, so the
+//     Kubernetes liveness/readiness probes (which cannot carry a bearer key)
+//     can observe the process. It leaks nothing: no tool, resource, or state.
+//   - The MCP Streamable HTTP endpoint is mounted at BOTH "/" (the original
+//     root mount) and "/mcp" (warehouse-ops-agent's *_MCP_ENDPOINT convention
+//     and the docs' examples). Every other method/path on those routes still
+//     goes through the bearer check inside the handler.
+//
+// chi matches the static /healthz route before the "/" handler, so the probe
+// never reaches the auth middleware.
+func newRouter(mcpHandler http.Handler) http.Handler {
+	r := chi.NewRouter()
+	r.Get("/healthz", healthz)
+	r.Handle("/", mcpHandler)
+	r.Handle("/mcp", mcpHandler)
+	return r
+}
+
+// healthz is the unauthenticated liveness/readiness endpoint.
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 // authKeys reads the bearer keys from the environment. MCP_READ_KEY grants

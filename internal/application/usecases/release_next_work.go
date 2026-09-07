@@ -21,6 +21,7 @@ type ReleaseNextWork struct {
 	clock     ports.Clock
 	policy    release.ReleasePolicy
 	released  metric.Int64Counter
+	uow       ports.UnitOfWork
 }
 
 func NewReleaseNextWork(pools ports.WorkPoolRepo, workUnits ports.WorkUnitRepo, publisher ports.EventPublisher, clock ports.Clock) *ReleaseNextWork {
@@ -39,6 +40,13 @@ func NewReleaseNextWork(pools ports.WorkPoolRepo, workUnits ports.WorkUnitRepo, 
 
 type ReleaseNextWorkRequest struct {
 	PathId shared.PathId
+}
+
+// WithUnitOfWork brackets both Saves + Publish in one atomic scope
+// (ADR-0014). Optional: nil keeps the calls running back to back.
+func (uc *ReleaseNextWork) WithUnitOfWork(u ports.UnitOfWork) *ReleaseNextWork {
+	uc.uow = u
+	return uc
 }
 
 func (uc *ReleaseNextWork) Execute(ctx context.Context, req ReleaseNextWorkRequest) (*workunit.WorkUnit, error) {
@@ -62,15 +70,20 @@ func (uc *ReleaseNextWork) Execute(ctx context.Context, req ReleaseNextWorkReque
 		return nil, err
 	}
 
-	if err := uc.pools.Save(ctx, pool); err != nil {
-		return nil, err
-	}
-	if err := uc.workUnits.Save(ctx, unit); err != nil {
-		return nil, err
-	}
-
+	// The WorkUnit Save precedes Publish INSIDE the scope on purpose: the
+	// integration publisher enriches WorkReleased by reading the work unit
+	// back, and under the outbox that read must see this transaction's row.
 	event := shared.NewWorkReleased(unit.Id(), req.PathId, now)
-	if err := uc.publisher.Publish(ctx, event); err != nil {
+	err = atomically(ctx, uc.uow, func(ctx context.Context) error {
+		if err := uc.pools.Save(ctx, pool); err != nil {
+			return err
+		}
+		if err := uc.workUnits.Save(ctx, unit); err != nil {
+			return err
+		}
+		return uc.publisher.Publish(ctx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
 

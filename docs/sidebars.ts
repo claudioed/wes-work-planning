@@ -97,6 +97,7 @@ const sidebars: SidebarsConfig = {
         'adr/0011-analytical-data-product',
         'adr/0012-process-path-catalogue-validation',
         'adr/0013-standard-metrics-convention',
+        'adr/0014-transactional-outbox',
       ],
     },
   ],

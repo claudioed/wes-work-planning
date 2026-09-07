@@ -26,7 +26,7 @@ func stateToString(s workunit.State) string {
 }
 
 func (r *WorkUnitRepo) Save(ctx context.Context, unit *workunit.WorkUnit) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO work_units (id, path_id, cpt, reference, sku, state, released_at, completed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (id) DO UPDATE SET
@@ -69,7 +69,7 @@ func (r *WorkUnitRepo) FindById(ctx context.Context, id string) (*workunit.WorkU
 	var cpt time.Time
 	var releasedAt, completedAt *time.Time
 
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT path_id, cpt, reference, sku, state, released_at, completed_at
 		FROM work_units WHERE id = $1
 	`, id)
@@ -84,7 +84,7 @@ func (r *WorkUnitRepo) FindById(ctx context.Context, id string) (*workunit.WorkU
 }
 
 func (r *WorkUnitRepo) FindByPathId(ctx context.Context, pathId shared.PathId) ([]*workunit.WorkUnit, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := querierFrom(ctx, r.pool).Query(ctx, `
 		SELECT id, cpt, reference, sku, state, released_at, completed_at
 		FROM work_units WHERE path_id = $1
 	`, pathId.String())
@@ -119,7 +119,7 @@ func (r *WorkUnitRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (
 // one WorkUnit across retries/history, so this returns a slice; an empty
 // slice (not ports.ErrNotFound) when nothing matches.
 func (r *WorkUnitRepo) FindByReference(ctx context.Context, reference string) ([]*workunit.WorkUnit, error) {
-	rows, err := r.pool.Query(ctx, `
+	rows, err := querierFrom(ctx, r.pool).Query(ctx, `
 		SELECT id, path_id, cpt, sku, state, released_at, completed_at
 		FROM work_units WHERE reference = $1
 	`, reference)
