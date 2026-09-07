@@ -26,7 +26,7 @@ func (r *PlanRepo) Save(ctx context.Context, pathId shared.PathId, shiftPlan *pl
 		return errors.New("shift plan has no path plan for the given path id")
 	}
 
-	_, err := r.pool.Exec(ctx, `
+	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO shift_plans (path_id, planned_heads, installed_stations, rate_units_per_hr, hours)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (path_id) DO UPDATE SET
@@ -39,7 +39,7 @@ func (r *PlanRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (*pla
 	var plannedHeads, installedStations int
 	var rateUnitsPerHr, hours float64
 
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT planned_heads, installed_stations, rate_units_per_hr, hours
 		FROM shift_plans WHERE path_id = $1
 	`, pathId.String())

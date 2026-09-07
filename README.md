@@ -33,9 +33,10 @@ internal/
     usecases/                one struct per use case
   adapters/
     inbound/http/            REST handlers, DTOs, chi router
-    outbound/postgres/       pgx repositories + migrations
+    outbound/postgres/       pgx repositories + migrations, UnitOfWork, transactional outbox + relay (ADR-0014)
     outbound/memory/         in-memory repositories (tests/local)
-    outbound/events/         log-based event publisher (Kafka-ready interface)
+    outbound/events/         log-based event publisher + MultiPublisher (direct Kafka fan-out when no Postgres)
+    outbound/kafka/          integration + analytics publishers (also the outbox's Encoders) and the relay's RelaySink
 migrations/                  golang-migrate SQL files
 ```
 
@@ -72,8 +73,9 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 |------------------|---------|--------------------------------------------------------------------------|
 | `HTTP_ADDR`      | `:8080` | Address the HTTP server listens on                                     |
 | `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
-| `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published         |
+| `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published. With `kafka` **and** `DATABASE_URL` set, events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both Kafka topics by an in-process relay (transactional outbox, [ADR-0014](docs/docs/adr/0014-transactional-outbox.md)); with `kafka` but no `DATABASE_URL` they are published directly |
 | `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
+| `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration, e.g. `500ms`). Only used in outbox mode |
 | `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
 | `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
 | `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` reads). Loaded once at startup; a missing or invalid file is a fatal boot-time error — see [ADR-0012](docs/docs/adr/0012-process-path-catalogue-validation.md) |

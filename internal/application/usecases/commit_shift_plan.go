@@ -14,10 +14,18 @@ type CommitShiftPlan struct {
 	plans     ports.PlanRepo
 	publisher ports.EventPublisher
 	clock     ports.Clock
+	uow       ports.UnitOfWork
 }
 
 func NewCommitShiftPlan(plans ports.PlanRepo, publisher ports.EventPublisher, clock ports.Clock) *CommitShiftPlan {
 	return &CommitShiftPlan{plans: plans, publisher: publisher, clock: clock}
+}
+
+// WithUnitOfWork brackets Save + Publish in one atomic scope (ADR-0014).
+// Optional: nil keeps the two calls running back to back.
+func (uc *CommitShiftPlan) WithUnitOfWork(u ports.UnitOfWork) *CommitShiftPlan {
+	uc.uow = u
+	return uc
 }
 
 type CommitShiftPlanRequest struct {
@@ -39,12 +47,14 @@ func (uc *CommitShiftPlan) Execute(ctx context.Context, req CommitShiftPlanReque
 		return nil, err
 	}
 
-	if err := uc.plans.Save(ctx, req.PathId, shiftPlan); err != nil {
-		return nil, err
-	}
-
 	event := shared.NewShiftPlanCommitted(req.PathId, uc.clock.Now())
-	if err := uc.publisher.Publish(ctx, event); err != nil {
+	err = atomically(ctx, uc.uow, func(ctx context.Context) error {
+		if err := uc.plans.Save(ctx, req.PathId, shiftPlan); err != nil {
+			return err
+		}
+		return uc.publisher.Publish(ctx, event)
+	})
+	if err != nil {
 		return nil, err
 	}
 
