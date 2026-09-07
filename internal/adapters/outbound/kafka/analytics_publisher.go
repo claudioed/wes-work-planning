@@ -82,7 +82,8 @@ func (p *AnalyticsPublisher) Close() error {
 
 // Publish emits every event in events onto AnalyticsTopic. Events with no
 // analytics payload (an unrecognised type) are skipped rather than erroring,
-// so the caller can hand it the full event stream indiscriminately.
+// so the caller can hand it the full event stream indiscriminately. It is
+// Encode followed by WriteMessages.
 func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
 	if len(events) == 0 {
 		return nil
@@ -93,8 +94,37 @@ func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.Domai
 	)
 	defer span.End()
 
-	msgs := make([]kafkago.Message, 0, len(events))
-	emitted := make([]string, 0, len(events))
+	encoded, err := p.Encode(ctx, events...)
+	if err != nil {
+		return recordErr(span, err)
+	}
+	if len(encoded) == 0 {
+		return nil
+	}
+
+	msgs := make([]kafkago.Message, len(encoded))
+	emitted := make([]string, len(encoded))
+	for i, e := range encoded {
+		// The writer pins its Topic, so the message must not (kafka-go
+		// rejects the combination); Encoded.Topic is for the relay.
+		msgs[i] = e.message(false)
+		emitted[i] = e.EventType
+	}
+
+	span.SetAttributes(attribute.StringSlice("messaging.event_types", emitted))
+
+	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
+		return recordErr(span, fmt.Errorf("kafka: publish analytics events: %w", err))
+	}
+	return nil
+}
+
+// Encode builds the analytics-topic wire form of every event in the
+// analytics contract — envelope, aggregate-id key, W3C trace headers of
+// whatever span is active on ctx — and silently drops the rest, so the
+// returned slice may be shorter than events. It never touches the broker.
+func (p *AnalyticsPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
+	out := make([]Encoded, 0, len(events))
 	for _, e := range events {
 		eventType, key, data, ok := marshalAnalyticsData(e)
 		if !ok {
@@ -110,24 +140,19 @@ func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.Domai
 		}
 		body, err := json.Marshal(env)
 		if err != nil {
-			return recordErr(span, fmt.Errorf("kafka: marshal analytics envelope: %w", err))
+			return nil, fmt.Errorf("kafka: marshal analytics envelope: %w", err)
 		}
 		msg := kafkago.Message{Key: []byte(key), Value: body}
 		otelkafka.Inject(ctx, &msg)
-		msgs = append(msgs, msg)
-		emitted = append(emitted, eventType)
+		out = append(out, Encoded{
+			Topic:     AnalyticsTopic,
+			EventType: eventType,
+			Key:       msg.Key,
+			Value:     msg.Value,
+			Headers:   msg.Headers,
+		})
 	}
-
-	if len(msgs) == 0 {
-		return nil
-	}
-
-	span.SetAttributes(attribute.StringSlice("messaging.event_types", emitted))
-
-	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
-		return recordErr(span, fmt.Errorf("kafka: publish analytics events: %w", err))
-	}
-	return nil
+	return out, nil
 }
 
 // marshalAnalyticsData maps a domain event to its analytics event_type,

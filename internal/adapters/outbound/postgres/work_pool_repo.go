@@ -36,11 +36,14 @@ func stringToMode(s string) release.FeedMode {
 }
 
 func (r *WorkPoolRepo) Save(ctx context.Context, wp *release.WorkPool) error {
-	tx, err := r.pool.Begin(ctx)
+	// Join the enclosing UnitOfWork transaction when there is one (so a
+	// use case rollback also undoes this pool write), else run in a
+	// transaction of our own — the entries rewrite must be atomic either way.
+	tx, commit, rollback, err := beginOrJoin(ctx, r.pool)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	defer func() { _ = rollback(ctx) }()
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO work_pools (path_id, mode, wip_limit, alarm_threshold)
@@ -71,13 +74,13 @@ func (r *WorkPoolRepo) Save(ctx context.Context, wp *release.WorkPool) error {
 		}
 	}
 
-	return tx.Commit(ctx)
+	return commit(ctx)
 }
 
 func (r *WorkPoolRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (*release.WorkPool, error) {
 	var modeStr string
 	var wipLimit, alarmThreshold int
-	row := r.pool.QueryRow(ctx, `SELECT mode, wip_limit, alarm_threshold FROM work_pools WHERE path_id = $1`, pathId.String())
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `SELECT mode, wip_limit, alarm_threshold FROM work_pools WHERE path_id = $1`, pathId.String())
 	if err := row.Scan(&modeStr, &wipLimit, &alarmThreshold); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ports.ErrNotFound
@@ -87,7 +90,7 @@ func (r *WorkPoolRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (
 
 	wp := release.NewWorkPool(pathId, stringToMode(modeStr), wipLimit, alarmThreshold)
 
-	rows, err := r.pool.Query(ctx, `
+	rows, err := querierFrom(ctx, r.pool).Query(ctx, `
 		SELECT work_unit_id, cpt, state FROM work_pool_entries
 		WHERE path_id = $1 ORDER BY cpt ASC
 	`, pathId.String())

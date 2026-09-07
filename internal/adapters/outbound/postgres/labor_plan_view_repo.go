@@ -21,7 +21,7 @@ func NewLaborPlanViewRepo(pool *pgxpool.Pool) *LaborPlanViewRepo {
 }
 
 func (r *LaborPlanViewRepo) Save(ctx context.Context, view laborview.LaborPlanObserved) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO labor_plan_view (path_id, planned_heads, planned_rate, planned_hours, observed_at)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (path_id) DO UPDATE SET
@@ -31,7 +31,7 @@ func (r *LaborPlanViewRepo) Save(ctx context.Context, view laborview.LaborPlanOb
 }
 
 func (r *LaborPlanViewRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (laborview.LaborPlanObserved, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT planned_heads, planned_rate, planned_hours, observed_at
 		FROM labor_plan_view WHERE path_id = $1
 	`, pathId.String())

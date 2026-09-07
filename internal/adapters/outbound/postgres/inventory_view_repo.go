@@ -21,7 +21,7 @@ func NewInventoryViewRepo(pool *pgxpool.Pool) *InventoryViewRepo {
 }
 
 func (r *InventoryViewRepo) ApplyDelta(ctx context.Context, sku string, delta int, observedAt time.Time) (inventoryview.UsableInventoryObserved, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		INSERT INTO usable_inventory_view (sku, usable_quantity, observed_at)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (sku) DO UPDATE SET
@@ -37,7 +37,7 @@ func (r *InventoryViewRepo) ApplyDelta(ctx context.Context, sku string, delta in
 }
 
 func (r *InventoryViewRepo) FindBySKU(ctx context.Context, sku string) (inventoryview.UsableInventoryObserved, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT usable_quantity, observed_at FROM usable_inventory_view WHERE sku = $1
 	`, sku)
 
