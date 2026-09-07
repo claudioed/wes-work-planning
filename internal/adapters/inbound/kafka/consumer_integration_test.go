@@ -6,12 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
+	"github.com/testcontainers/testcontainers-go"
+	tckafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
 	inboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/inbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/envelope"
@@ -24,19 +24,23 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/domain/workunit"
 )
 
-// TestConsumer_ProjectsRealBrokerMessages requires KAFKA_BROKERS to point at
-// a running broker (the shared broker at ~/warehouse-systems/docker-compose.kafka.yml
-// on localhost:9092). It publishes a ShiftPlanCommitted-shaped message and a
-// StockReserved-shaped message, runs the real Consumer against them, and
-// asserts the read models update. Run with:
-//
-//	KAFKA_BROKERS=localhost:9092 go test -tags=integration ./internal/adapters/inbound/kafka/...
+// TestConsumer_ProjectsRealBrokerMessages runs the real consumer against an
+// isolated Kafka broker. CI has no external Kafka service, so the test must
+// execute through Testcontainers rather than silently skip.
 func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
-	brokersCSV := os.Getenv("KAFKA_BROKERS")
-	if brokersCSV == "" {
-		t.Skip("KAFKA_BROKERS not set; skipping kafka integration test")
+	ctx := context.Background()
+	container, err := tckafka.Run(ctx, "confluentinc/confluent-local:7.6.1", tckafka.WithClusterID("wes-inbound-itest"))
+	if err != nil {
+		t.Fatalf("start Kafka container: %v", err)
 	}
-	brokers := strings.Split(brokersCSV, ",")
+	testcontainers.CleanupContainer(t, container)
+	brokers, err := container.Brokers(ctx)
+	if err != nil {
+		t.Fatalf("Kafka brokers: %v", err)
+	}
+	if err := createTopics(ctx, brokers, envelope.TopicWorkforceEvents, envelope.TopicInventoryEvents, envelope.TopicFulfillmentEvents, envelope.TopicOrderManagementEvents); err != nil {
+		t.Fatalf("create Kafka topics: %v", err)
+	}
 
 	pathIdValue := fmt.Sprintf("pick-integration-kafka-%d", time.Now().UnixNano())
 	sku := fmt.Sprintf("integration-kafka-sku-%d", time.Now().UnixNano())
@@ -67,7 +71,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	publishCtx, publishCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer publishCancel()
 
-	workforceWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicWorkforceEvents, AllowAutoTopicCreation: true}
+	workforceWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicWorkforceEvents, AllowAutoTopicCreation: false}
 	defer workforceWriter.Close()
 	if err := workforceWriter.WriteMessages(publishCtx, kafkago.Message{
 		Key: []byte("evt-shift-" + pathIdValue),
@@ -79,7 +83,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 		t.Fatalf("publish ShiftPlanCommitted: %v", err)
 	}
 
-	inventoryWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicInventoryEvents, AllowAutoTopicCreation: true}
+	inventoryWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicInventoryEvents, AllowAutoTopicCreation: false}
 	defer inventoryWriter.Close()
 	if err := inventoryWriter.WriteMessages(publishCtx, kafkago.Message{
 		Key: []byte("evt-reserve-" + sku),
@@ -90,7 +94,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 		t.Fatalf("publish StockReserved: %v", err)
 	}
 
-	fulfillmentWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicFulfillmentEvents, AllowAutoTopicCreation: true}
+	fulfillmentWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicFulfillmentEvents, AllowAutoTopicCreation: false}
 	defer fulfillmentWriter.Close()
 	if err := fulfillmentWriter.WriteMessages(publishCtx, kafkago.Message{
 		Key: []byte("evt-task-" + workUnitIdValue),
@@ -102,7 +106,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	}
 
 	orderId := fmt.Sprintf("integration-kafka-order-%d", time.Now().UnixNano())
-	orderManagementWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicOrderManagementEvents, AllowAutoTopicCreation: true}
+	orderManagementWriter := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: envelope.TopicOrderManagementEvents, AllowAutoTopicCreation: false}
 	defer orderManagementWriter.Close()
 	if err := orderManagementWriter.WriteMessages(publishCtx, kafkago.Message{
 		Key: []byte("evt-order-" + orderId),
@@ -214,4 +218,42 @@ func mustEnvelopeJSON(t *testing.T, eventId, eventType, source string, data map[
 		t.Fatalf("marshal envelope: %v", err)
 	}
 	return body
+}
+
+func createTopics(ctx context.Context, brokers []string, topics ...string) error {
+	conn, err := kafkago.DialContext(ctx, "tcp", brokers[0])
+	if err != nil {
+		return fmt.Errorf("dial Kafka: %w", err)
+	}
+	defer conn.Close()
+	controller, err := conn.Controller()
+	if err != nil {
+		return fmt.Errorf("Kafka controller: %w", err)
+	}
+	controllerConn, err := kafkago.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", controller.Host, controller.Port))
+	if err != nil {
+		return fmt.Errorf("dial Kafka controller: %w", err)
+	}
+	defer controllerConn.Close()
+	configs := make([]kafkago.TopicConfig, 0, len(topics))
+	for _, topic := range topics {
+		configs = append(configs, kafkago.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1})
+	}
+	if err := controllerConn.CreateTopics(configs...); err != nil {
+		return fmt.Errorf("create Kafka topics: %w", err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for _, topic := range topics {
+		for {
+			partitions, err := conn.ReadPartitions(topic)
+			if err == nil && len(partitions) > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("Kafka topic %q leader was not ready: %w", topic, err)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return nil
 }
