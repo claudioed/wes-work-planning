@@ -35,7 +35,8 @@ servers:
   - url: http://localhost:8080
     description: Local development (in-memory or Postgres adapters, see README)
 
-security: []
+security:
+  - bearerAuth: []
 
 tags:
   - name: Charge Forecast
@@ -89,6 +90,7 @@ paths:
         status body if the process is up — does not check downstream
         dependencies (Postgres, Kafka).
       tags: [Health]
+      security: []
       responses:
         "200":
           description: Service is up.
@@ -652,6 +654,12 @@ paths:
           $ref: "#/components/responses/InternalError"
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: OIDC access token with wes-work-planning.read or wes-work-planning.write scope.
   parameters:
     PathId:
       name: pathId

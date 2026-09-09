@@ -87,6 +87,12 @@ config:
   eventPublisher: "log"   # "log" or "kafka"
   logLevel: "info"        # debug | info | warn | error
 
+oidc:
+  # OIDC is mandatory for REST API processes. Values are public identifiers,
+  # never bearer tokens or client secrets.
+  issuerUrl: ""
+  clientId: ""
+
 database:
   # Plaintext URL (fine for local/dev clusters). Prefer existingSecret for
   # anything shared or long-lived.

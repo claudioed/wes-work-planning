@@ -41,6 +41,16 @@ spec:
               value: {{ .Values.analytics.reports.httpAddr | quote }}
             # The reports binary reads ANALYTICS_DATABASE_URL; it is fed the
             # READER (read-only) DSN so even a bug cannot mutate the read model.
+            - name: OIDC_ISSUER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "wes-work-planning.fullname" . }}
+                  key: OIDC_ISSUER_URL
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "wes-work-planning.fullname" . }}
+                  key: OIDC_CLIENT_ID
             - name: ANALYTICS_DATABASE_URL
               valueFrom:
                 secretKeyRef:

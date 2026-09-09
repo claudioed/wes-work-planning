@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	inboundauth "github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/http"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/analyticsstore"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/telemetry"
@@ -76,7 +78,13 @@ func run() error {
 	}
 
 	handlers := &inboundhttp.ReportsHandlers{Store: analyticsstore.NewPostgresReport(pool)}
-	router := inboundhttp.NewReportsRouter(handlers, otelServiceName, logger)
+	oidcCtx, cancelOIDC := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelOIDC()
+	oidcVerifier, err := inboundauth.NewVerifier(oidcCtx, os.Getenv("OIDC_ISSUER_URL"), os.Getenv("OIDC_CLIENT_ID"))
+	if err != nil {
+		return fmt.Errorf("configure REST OIDC authentication: %w", err)
+	}
+	router := inboundhttp.NewReportsRouter(handlers, otelServiceName, logger, oidcVerifier)
 
 	srv := &http.Server{Addr: httpAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 

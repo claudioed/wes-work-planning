@@ -4,11 +4,13 @@ go 1.26.6
 
 require (
 	github.com/arch-go/arch-go v1.7.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/cucumber/godog v0.16.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/go-logr/logr v1.4.4
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
@@ -48,6 +50,7 @@ require (
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect

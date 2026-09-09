@@ -51,6 +51,16 @@ spec:
               value: {{ .Values.config.eventPublisher | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
+            - name: OIDC_ISSUER_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "wes-work-planning.fullname" . }}
+                  key: OIDC_ISSUER_URL
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "wes-work-planning.fullname" . }}
+                  key: OIDC_CLIENT_ID
             {{- if .Values.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

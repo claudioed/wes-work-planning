@@ -49,6 +49,7 @@ no scheduler).
 | [0012](./0012-process-path-catalogue-validation.md) | Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017 | Accepted |
 | [0013](./0013-standard-metrics-convention.md) | Standard metrics convention across the fleet: Tier 1 OTel baseline + Tier 2 business-metric naming | Accepted |
 | [0014](./0014-transactional-outbox.md) | Transactional outbox feeding both the integration and the analytics topic, with an in-process relay | Accepted |
+| [0015](./0015-oidc-rest-auth.md) | OIDC bearer-token authorization for REST APIs | Accepted |
 
 ## The template
 

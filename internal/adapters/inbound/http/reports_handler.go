@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/riandyrn/otelchi"
 
+	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	"github.com/claudioed/wes-work-planning/internal/analytics/report"
 )
 
@@ -147,7 +148,7 @@ func writeReportInternal(w http.ResponseWriter, r *http.Request, err error) {
 // NewReportsRouter builds the chi router for the wes-reports reader service.
 // serviceName names the server in the OTel span attributes; a nil logger
 // falls back to slog.Default().
-func NewReportsRouter(h *ReportsHandlers, serviceName string, logger *slog.Logger) *chi.Mux {
+func NewReportsRouter(h *ReportsHandlers, serviceName string, logger *slog.Logger, verifiers ...*auth.Verifier) *chi.Mux {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -159,8 +160,15 @@ func NewReportsRouter(h *ReportsHandlers, serviceName string, logger *slog.Logge
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", h.GetReportsHealthz)
-	r.Get("/reports/throughput", h.GetThroughput)
-	r.Get("/reports/throughput/freshness", h.GetFreshness)
+	protected := func(r chi.Router) {
+		r.Get("/reports/throughput", h.GetThroughput)
+		r.Get("/reports/throughput/freshness", h.GetFreshness)
+	}
+	if len(verifiers) > 0 && verifiers[0] != nil {
+		r.Group(func(r chi.Router) { r.Use(auth.Middleware{Verifier: verifiers[0]}.Handler); protected(r) })
+	} else {
+		protected(r)
+	}
 
 	return r
 }

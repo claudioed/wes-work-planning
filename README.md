@@ -580,3 +580,7 @@ page from `apis/asyncapi.yaml`, the ecosystem context map, and seven
 architecture decision records. Source lives in [`docs/`](./docs) (Docusaurus);
 it is built and deployed to GitHub Pages by
 [`.github/workflows/docs.yml`](./.github/workflows/docs.yml).
+
+## REST OIDC authentication
+
+All REST endpoints except `GET /healthz` require an OIDC bearer token. Set `OIDC_ISSUER_URL` and `OIDC_CLIENT_ID`; startup fails closed if discovery/JWKS initialization cannot complete. The verifier checks issuer, signature, expiry, and audience. Safe methods require `wes-work-planning.read`; mutations require `wes-work-planning.write`. Send `Authorization: Bearer <token>`. Authentication errors use RFC 6750 challenges and RFC 7807 problem details.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	inboundauth "github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/inbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/envelope"
@@ -257,7 +258,15 @@ func run() error {
 		GetWorkUnitsByReference: usecases.NewGetWorkUnitsByReference(workUnits),
 	}
 
-	router := inboundhttp.NewRouter(handlers, otelServiceName, logger)
+	// REST authentication is deliberately mandatory: an unavailable identity
+	// provider prevents this process from serving unprotected APIs.
+	oidcCtx, cancelOIDC := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelOIDC()
+	oidcVerifier, err := inboundauth.NewVerifier(oidcCtx, os.Getenv("OIDC_ISSUER_URL"), os.Getenv("OIDC_CLIENT_ID"))
+	if err != nil {
+		return fmt.Errorf("configure REST OIDC authentication: %w", err)
+	}
+	router := inboundhttp.NewRouter(handlers, otelServiceName, logger, oidcVerifier)
 
 	server := &http.Server{
 		Addr:              httpAddr,

@@ -11,6 +11,8 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/riandyrn/otelchi"
 	otelchimetric "github.com/riandyrn/otelchi/metric"
+
+	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 )
 
 // NewRouter wires every REST endpoint to its handler.
@@ -20,8 +22,12 @@ import (
 // request gets a server span named after its chi route pattern (not the raw
 // path, which would blow up span cardinality on the {pathId}/{id}/{sku}
 // segments) plus the semconv http.server.request.duration histogram.
-func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
+func NewRouter(h *Handlers, serviceName string, logger *slog.Logger, verifiers ...*auth.Verifier) *chi.Mux {
 	r := chi.NewRouter()
+	var authMiddleware func(http.Handler) http.Handler
+	if len(verifiers) > 0 && verifiers[0] != nil {
+		authMiddleware = auth.Middleware{Verifier: verifiers[0]}.Handler
+	}
 
 	metricCfg := otelchimetric.NewBaseConfig(serviceName)
 
@@ -37,20 +43,26 @@ func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
 
 	r.Get("/healthz", healthz)
 
-	r.Route("/paths/{pathId}", func(r chi.Router) {
-		r.Post("/charge", h.postChargeForecast)
-		r.Post("/plan", h.postShiftPlan)
-		r.Post("/work-units", h.postWorkUnit)
-		r.Post("/release", h.postRelease)
-		r.Get("/telemetry", h.getTelemetry)
-		r.Get("/rebalance", h.getRebalance)
-		r.Get("/labor-plan-view", h.getLaborPlanView)
-	})
+	protected := func(r chi.Router) {
+		r.Route("/paths/{pathId}", func(r chi.Router) {
+			r.Post("/charge", h.postChargeForecast)
+			r.Post("/plan", h.postShiftPlan)
+			r.Post("/work-units", h.postWorkUnit)
+			r.Post("/release", h.postRelease)
+			r.Get("/telemetry", h.getTelemetry)
+			r.Get("/rebalance", h.getRebalance)
+			r.Get("/labor-plan-view", h.getLaborPlanView)
+		})
 
-	r.Post("/work-units/{id}/complete", h.postComplete)
-	r.Get("/work-units", h.getWorkUnitsByReference)
-
-	r.Get("/inventory-view/{sku}", h.getInventoryView)
+		r.Post("/work-units/{id}/complete", h.postComplete)
+		r.Get("/work-units", h.getWorkUnitsByReference)
+		r.Get("/inventory-view/{sku}", h.getInventoryView)
+	}
+	if authMiddleware != nil {
+		r.Group(func(r chi.Router) { r.Use(authMiddleware); protected(r) })
+	} else {
+		protected(r)
+	}
 
 	return r
 }
