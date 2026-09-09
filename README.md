@@ -78,10 +78,6 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration, e.g. `500ms`). Only used in outbox mode |
 | `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
 | `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
-| `INVENTORY_STORAGE_API_KEY` | (unset) | Static bearer key presented to inventory-storage (`Authorization: Bearer`) on every classification lookup; no header when unset ([ADR-0015](docs/docs/adr/0015-rest-identity-static-bearer-scopes.md)) |
-| `AUTH_MODE` | `enforce` if any key is set, else `off` | REST identity mode ([ADR-0015](docs/docs/adr/0015-rest-identity-static-bearer-scopes.md)): `enforce` (401/403 RFC 7807 on failure), `log` (serve but log `auth: would-reject` — the rollout gate), `off` (middleware disabled; the binary WARNs). Applies to `cmd/wes` and `cmd/wes-reports`; `GET /healthz` is always open |
-| `API_READ_KEY` | (unset) | Bearer key granting the `read` scope (`GET`/`HEAD`/`OPTIONS`, every `/reports/*` route). Falls back to `MCP_READ_KEY` |
-| `API_READWRITE_KEY` | (unset) | Bearer key granting the `read-write` scope (every method). Falls back to `MCP_READWRITE_KEY` |
 | `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` reads). Loaded once at startup; a missing or invalid file is a fatal boot-time error — see [ADR-0012](docs/docs/adr/0012-process-path-catalogue-validation.md) |
 
 ## Analytics data product (Release Throughput & Backlog Health)
@@ -135,20 +131,17 @@ The MCP server ([ADR-0008](docs/docs/adr/0008-mcp-inbound-adapter.md)) ships in
 the same image as the OLTP service (`/app/mcp`, built from `cmd/mcp`) and is
 deployed by the Helm chart as a separate Deployment + ClusterIP Service
 (`<release>-mcp`, port `8090`) when `mcp.enabled=true`. It is **off by default**.
-The binary reuses the OLTP `DATABASE_URL` secret, reads its bearer keys from a
-chart-managed Secret (`mcp.readKey` → `MCP_READ_KEY`, `mcp.readWriteKey` →
-`MCP_READWRITE_KEY`), and — when `analytics.enabled=true` — is pointed at this
-release's reports Service so the report tool is registered. The Streamable HTTP
-endpoint is mounted at both `/` and `/mcp` (warehouse-ops-agent's
-`*_MCP_ENDPOINT` convention is `http://<release>-mcp.<ns>.svc.cluster.local:8090/mcp`);
-`GET /healthz` is unauthenticated and backs the liveness/readiness probes.
+The binary reuses the OLTP `DATABASE_URL` secret, and — when
+`analytics.enabled=true` — is pointed at this release's reports Service so the
+report tool is registered. The Streamable HTTP endpoint is mounted at both `/`
+and `/mcp` (warehouse-ops-agent's `*_MCP_ENDPOINT` convention is
+`http://<release>-mcp.<ns>.svc.cluster.local:8090/mcp`); `GET /healthz`
+backs the liveness/readiness probes.
 
 ```sh
 helm upgrade --install wes charts/wes-work-planning \
   --set database.url="postgres://..." \
-  --set mcp.enabled=true \
-  --set mcp.readKey="$(openssl rand -hex 20)" \
-  --set mcp.readWriteKey="$(openssl rand -hex 20)"
+  --set mcp.enabled=true
 ```
 
 ### Analytics config
@@ -168,24 +161,7 @@ documented exhaustively (full request/response schemas, every status code, a
 `Problem` component reused across every error response) in
 [`apis/openapi.yaml`](./apis/openapi.yaml).
 
-### Authentication
-
-Every route except `GET /healthz` requires a static bearer key
-([ADR-0015](docs/docs/adr/0015-rest-identity-static-bearer-scopes.md),
-adopting the fleet decision in warehouse-ops-agent ADR 0005). Safe methods
-need the `read` scope, mutating methods need `read-write`; the reports reader
-requires `read` on every `/reports/*` route. A missing or invalid key yields
-`401` with `WWW-Authenticate: Bearer`, a valid key without the required scope
-yields `403` — both RFC 7807 problem details typed `.../unauthenticated` and
-`.../insufficient-scope`. Without any key configured the middleware is off
-(local development), so the examples below work as-is; with keys, add
-`-H 'Authorization: Bearer <key>'`. In Kubernetes the chart wires
-`auth.readKey` / `auth.readWriteKey` (or `auth.existingSecret`) into
-`API_READ_KEY` / `API_READWRITE_KEY` for both the OLTP and reports
-Deployments, `auth.mode` into `AUTH_MODE`, and `inventoryStorage.apiKey`
-into `INVENTORY_STORAGE_API_KEY`.
-
-### Errors
+## Errors
 
 Every error response (4xx/5xx) is [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807)
 `application/problem+json`, not a bespoke shape:

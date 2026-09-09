@@ -14,8 +14,6 @@ spec:
       app.kubernetes.io/component: mcp
   template:
     metadata:
-      annotations:
-        checksum/mcp-secret: {{ include (print $.Template.BasePath "/mcp-secret.yaml") . | sha256sum }}
       labels:
         {{- include "wes-work-planning.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: mcp
@@ -52,21 +50,6 @@ spec:
                   name: {{ include "wes-work-planning.databaseSecretName" . }}
                   key: {{ .Values.database.existingSecretKey }}
             {{- end }}
-            # Static bearer keys (ADR-0008): read scope and read-write scope.
-            # Both are optional at the secret level; a missing key means that
-            # scope is simply not grantable (fail closed), never open access.
-            - name: MCP_READ_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wes-work-planning.mcpSecretName" . }}
-                  key: MCP_READ_KEY
-                  optional: true
-            - name: MCP_READWRITE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "wes-work-planning.mcpSecretName" . }}
-                  key: MCP_READWRITE_KEY
-                  optional: true
             {{- if .Values.mcp.reportsBaseUrl }}
             - name: REPORTS_BASE_URL
               value: {{ .Values.mcp.reportsBaseUrl | quote }}

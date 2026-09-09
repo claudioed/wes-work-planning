@@ -3,10 +3,6 @@
 // those to the inbound MCP adapter, then serves MCP over Streamable HTTP. It
 // is a second, independent deployable alongside cmd/wes (the HTTP service),
 // per ADR-0008.
-//
-// Auth is a static bearer key (no IdP): set MCP_READ_KEY (and optionally
-// MCP_READWRITE_KEY) from a Kubernetes Secret. A request must present a valid
-// key; the scope it grants gates the tools.
 package main
 
 import (
@@ -21,7 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	inboundmcp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/mcp"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/memory"
@@ -120,8 +115,7 @@ func run() error {
 	}
 	server := inboundmcp.NewServer(deps)
 
-	authn := inboundmcp.NewStaticKeyAuth(authKeys(logger))
-	handler := inboundmcp.Handler(server, authn)
+	handler := inboundmcp.Handler(server)
 
 	srv := &http.Server{
 		Addr:              httpAddr,
@@ -176,21 +170,6 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
-}
-
-// authKeys reads the bearer keys from the environment through the shared
-// auth package (ADR-0015): API_READ_KEY / API_READWRITE_KEY, falling back
-// to MCP_READ_KEY / MCP_READWRITE_KEY (the names this surface has always
-// used), so one Secret can serve both the REST and MCP surfaces. If no key
-// is set the server still starts but rejects every request (fail closed) —
-// a missing key must never mean "open to everyone". The keys themselves
-// are never logged.
-func authKeys(logger *slog.Logger) map[string]inboundmcp.Scope {
-	keys := auth.KeysFromEnv(os.Getenv)
-	if len(keys) == 0 {
-		logger.Warn("no MCP_READ_KEY/MCP_READWRITE_KEY (or API_READ_KEY/API_READWRITE_KEY) set; server will reject all requests")
-	}
-	return keys
 }
 
 // newLogger builds the process-wide structured logger: JSON to stdout, at the

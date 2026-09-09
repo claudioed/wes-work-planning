@@ -14,10 +14,8 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 )
 
-const testReadKey = "router-test-read-key"
-
-// newTestRouter wires a real MCP handler (in-memory adapters, one static read
-// key) behind newRouter, exactly as run() does.
+// newTestRouter wires a real MCP handler (in-memory adapters) behind
+// newRouter, exactly as run() does.
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 	pools := memory.NewWorkPoolRepo()
@@ -30,8 +28,7 @@ func newTestRouter(t *testing.T) http.Handler {
 		ReleaseNextWork:   usecases.NewReleaseNextWork(pools, workUnits, publisher, clock),
 	}
 	server := inboundmcp.NewServer(deps)
-	auth := inboundmcp.NewStaticKeyAuth(map[string]inboundmcp.Scope{testReadKey: inboundmcp.ScopeRead})
-	return newRouter(inboundmcp.Handler(server, auth))
+	return newRouter(inboundmcp.Handler(server))
 }
 
 func TestRouter_HealthzIsUnauthenticated(t *testing.T) {
@@ -54,26 +51,7 @@ func TestRouter_HealthzIsUnauthenticated(t *testing.T) {
 	}
 }
 
-func TestRouter_MCPMountsRequireBearer(t *testing.T) {
-	router := newTestRouter(t)
-	for _, path := range []string{"/", "/mcp"} {
-		t.Run(path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
-			req.Header.Set("Content-Type", "application/json")
-			router.ServeHTTP(rec, req)
-
-			if rec.Code != http.StatusUnauthorized {
-				t.Fatalf("POST %s without bearer: status = %d, want 401", path, rec.Code)
-			}
-			if got := rec.Header().Get("WWW-Authenticate"); !strings.HasPrefix(got, "Bearer") {
-				t.Fatalf("WWW-Authenticate = %q, want a Bearer challenge", got)
-			}
-		})
-	}
-}
-
-func TestRouter_MCPMountsReachHandlerWithBearer(t *testing.T) {
+func TestRouter_MCPMountsReachHandler(t *testing.T) {
 	router := newTestRouter(t)
 	const initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"router-test","version":"0.0.1"}}}`
 	for _, path := range []string{"/", "/mcp"} {
@@ -82,13 +60,10 @@ func TestRouter_MCPMountsReachHandlerWithBearer(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(initialize))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Accept", "application/json, text/event-stream")
-			req.Header.Set("Authorization", "Bearer "+testReadKey)
 			router.ServeHTTP(rec, req)
 
-			// A valid key gets past auth and into the Streamable HTTP handler,
-			// which answers the initialize handshake and opens a session.
 			if rec.Code != http.StatusOK {
-				t.Fatalf("POST %s initialize with bearer: status = %d, want 200 (body %q)", path, rec.Code, rec.Body.String())
+				t.Fatalf("POST %s initialize: status = %d, want 200 (body %q)", path, rec.Code, rec.Body.String())
 			}
 			if rec.Header().Get("Mcp-Session-Id") == "" {
 				t.Fatalf("POST %s initialize: no Mcp-Session-Id header — request did not reach the MCP handler", path)

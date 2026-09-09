@@ -18,13 +18,13 @@ const (
 	backlogURISuffix = "/backlog"
 )
 
-// registerResources adds the scoped read-model resource. Per the charter,
+// registerResources adds the read-model resource. Per the charter,
 // resources are bounded-context contracts tied to a decision, not bulk dumps:
 // this one answers "what is the live backlog telemetry for this one process
 // path?", backed by the same SampleBacklog read model the tool uses. Because a
 // path id is open-ended (unlike a fixed enum), it is exposed as an RFC 6570
 // URI template rather than one concrete resource per path.
-func (d Deps) registerResources(server *mcp.Server, scopeOf func(context.Context) Scope) {
+func (d Deps) registerResources(server *mcp.Server) {
 	server.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: backlogURIPrefix + "{pathId}" + backlogURISuffix,
 		Name:        "process path backlog telemetry",
@@ -32,9 +32,6 @@ func (d Deps) registerResources(server *mcp.Server, scopeOf func(context.Context
 		MIMEType:    "application/json",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		uri := req.Params.URI
-		if !scopeAllows(scopeOf(ctx), ScopeRead) {
-			return nil, fmt.Errorf("resource %q requires read scope", uri)
-		}
 		rawPathId, err := parseBacklogURI(uri)
 		if err != nil {
 			return nil, err

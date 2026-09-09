@@ -162,12 +162,12 @@ func GetThroughputReportForTest(ctx context.Context, client ReportsClient, in Th
 // registerReportTool adds the curated read-only throughput report tool. It is
 // registered only when a reports client is configured (Deps.Reports != nil),
 // so an MCP deployment without the reports service simply does not expose it.
-func (d Deps) registerReportTool(server *mcp.Server, scopeOf func(context.Context) Scope) {
+func (d Deps) registerReportTool(server *mcp.Server) {
 	if d.Reports == nil {
 		return
 	}
 	readOnly := true
-	addTool(server, scopeOf, ScopeRead, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "get_release_throughput_report",
 		Description: "Return the Release Throughput & Backlog Health report (work released, work units completed, backlog-threshold breaches, path throttles, rate-deviation detections) per process path and hour, for a time window, optionally filtered by path. Reads via the wes-reports REST service.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},

@@ -39,30 +39,18 @@ type HTTPDoer interface {
 // ports.ProductClassificationLookup, calling inventory-storage's
 // GET /products/{sku}/classification.
 type Client struct {
-	baseURL     string
-	doer        HTTPDoer
-	bearerToken string
+	baseURL string
+	doer    HTTPDoer
 }
 
 // NewClient builds a Client against baseURL (e.g. from
 // INVENTORY_STORAGE_BASE_URL). A nil doer defaults to an *http.Client with
-// DefaultTimeout. The client sends no Authorization header; see
-// WithBearerToken.
+// DefaultTimeout.
 func NewClient(baseURL string, doer HTTPDoer) *Client {
 	if doer == nil {
 		doer = &http.Client{Timeout: DefaultTimeout}
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), doer: doer}
-}
-
-// WithBearerToken sets the static bearer credential (INVENTORY_STORAGE_API_KEY)
-// sent as "Authorization: Bearer ..." on every request, per the fleet REST
-// identity decision (ADR-0015). An empty token leaves the header off so a
-// peer running with AUTH_MODE=off keeps working unchanged. Returns the
-// receiver for chaining.
-func (c *Client) WithBearerToken(token string) *Client {
-	c.bearerToken = strings.TrimSpace(token)
-	return c
 }
 
 // classificationResponse mirrors inventory-storage's
@@ -93,9 +81,6 @@ func (c *Client) GetClassification(ctx context.Context, sku string) (productclas
 		return productclassificationview.ProductClassificationView{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearerToken)
-	}
 
 	resp, err := c.doer.Do(req)
 	if err != nil {

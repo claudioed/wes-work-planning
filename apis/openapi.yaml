@@ -35,15 +35,6 @@ servers:
   - url: http://localhost:8080
     description: Local development (in-memory or Postgres adapters, see README)
 
-# REST identity (ADR-0015, adopting warehouse-ops-agent ADR 0005): every
-# operation requires a static bearer key. GET/HEAD/OPTIONS need the "read"
-# scope, every other method needs "read-write"; GET /healthz is open for the
-# Kubernetes probes. Failures are RFC 7807 problem details: 401 (with a
-# WWW-Authenticate challenge) for a missing/invalid credential, 403 for an
-# insufficient scope.
-security:
-  - bearerAuth: []
-
 tags:
   - name: Charge Forecast
     description: >
@@ -91,7 +82,6 @@ paths:
     get:
       operationId: healthCheck
       summary: Health check
-      security: []
       description: >
         Liveness probe for the service. Always returns 200 with a static
         status body if the process is up — does not check downstream
@@ -660,19 +650,6 @@ paths:
           $ref: "#/components/responses/InternalError"
 
 components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      description: >
-        Static API key carried in the `Authorization` header with the `Bearer` scheme (ADR-0015).
-        Keys are issued out of band (Kubernetes Secret) and map to a scope:
-        `read` (GET/HEAD/OPTIONS) or `read-write` (every method). A missing
-        or invalid key yields `401` with `WWW-Authenticate: Bearer`; a
-        valid key lacking the required scope yields `403`. Both are RFC 7807
-        `application/problem+json` bodies typed
-        `https://errors.wes-work-planning.warehouse-systems.dev/unauthenticated`
-        and `.../insufficient-scope`.
   parameters:
     PathId:
       name: pathId
