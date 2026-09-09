@@ -177,12 +177,14 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
 		required = func(r *http.Request) Scope { return RequiredFor(r.Method) }
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		safePath := sanitizeForLog(r.URL.Path)
+
 		granted, ok := m.Authn.Authenticate(r)
 		need := required(r)
 		switch {
 		case !ok:
 			if m.Mode == ModeLog {
-				logger.WarnContext(r.Context(), "auth: would-reject", "reason", "unauthenticated", "method", r.Method, "path", r.URL.Path)
+				logger.WarnContext(r.Context(), "auth: would-reject", "reason", "unauthenticated", "method", r.Method, "path", safePath)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -191,7 +193,7 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
 			return
 		case !Allows(granted, need):
 			if m.Mode == ModeLog {
-				logger.WarnContext(r.Context(), "auth: would-reject", "reason", "insufficient-scope", "granted", string(granted), "required", string(need), "method", r.Method, "path", r.URL.Path)
+				logger.WarnContext(r.Context(), "auth: would-reject", "reason", "insufficient-scope", "granted", string(granted), "required", string(need), "method", r.Method, "path", safePath)
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), scopeKey{}, granted)))
 				return
 			}
@@ -200,6 +202,12 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), scopeKey{}, granted)))
 	})
+}
+
+func sanitizeForLog(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	s = strings.ReplaceAll(s, "\r", "")
+	return s
 }
 
 func (m Middleware) problem(w http.ResponseWriter, r *http.Request, status int, slug, detail string) {
