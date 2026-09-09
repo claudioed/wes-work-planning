@@ -18,6 +18,10 @@ import (
 )
 
 func newTestRouter() http.Handler {
+	return inboundhttp.NewRouter(newTestHandlers(), "wes-work-planning", nil)
+}
+
+func newTestHandlers() *inboundhttp.Handlers {
 	charges := memory.NewChargeRepo()
 	plans := memory.NewPlanRepo()
 	pools := memory.NewWorkPoolRepo()
@@ -40,7 +44,7 @@ func newTestRouter() http.Handler {
 		GetWorkUnitsByReference: usecases.NewGetWorkUnitsByReference(workUnits),
 	}
 
-	return inboundhttp.NewRouter(h, "wes-work-planning", nil)
+	return h
 }
 
 func doJSON(t *testing.T, router http.Handler, method, path string, body any) *httptest.ResponseRecorder {

@@ -11,9 +11,13 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/riandyrn/otelchi"
 	otelchimetric "github.com/riandyrn/otelchi/metric"
+
+	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 )
 
-// NewRouter wires every REST endpoint to its handler.
+// NewRouter wires every REST endpoint to its handler with REST auth OFF —
+// the shape every handler test uses. Production composition roots call
+// NewRouterWithAuth.
 //
 // serviceName names the server in the OTel span and metric attributes;
 // logger, when non-nil, enables the structured per-request access log. Each
@@ -21,6 +25,15 @@ import (
 // path, which would blow up span cardinality on the {pathId}/{id}/{sku}
 // segments) plus the semconv http.server.request.duration histogram.
 func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
+	return NewRouterWithAuth(h, serviceName, logger, auth.Middleware{Mode: auth.ModeOff})
+}
+
+// NewRouterWithAuth is NewRouter plus the fleet-standard bearer/scope
+// middleware (ADR-0015) mounted on every route EXCEPT GET /healthz, which
+// stays open for the Kubernetes probes. GET/HEAD/OPTIONS require the read
+// scope; every other method requires read-write. authn.Mode == auth.ModeOff
+// makes the middleware a no-op.
+func NewRouterWithAuth(h *Handlers, serviceName string, logger *slog.Logger, authn auth.Middleware) *chi.Mux {
 	r := chi.NewRouter()
 
 	metricCfg := otelchimetric.NewBaseConfig(serviceName)
@@ -37,20 +50,31 @@ func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
 
 	r.Get("/healthz", healthz)
 
-	r.Route("/paths/{pathId}", func(r chi.Router) {
-		r.Post("/charge", h.postChargeForecast)
-		r.Post("/plan", h.postShiftPlan)
-		r.Post("/work-units", h.postWorkUnit)
-		r.Post("/release", h.postRelease)
-		r.Get("/telemetry", h.getTelemetry)
-		r.Get("/rebalance", h.getRebalance)
-		r.Get("/labor-plan-view", h.getLaborPlanView)
+	if authn.ProblemBase == "" {
+		authn.ProblemBase = problemBaseURI
+	}
+	if authn.Logger == nil {
+		authn.Logger = logger
+	}
+
+	r.Group(func(r chi.Router) {
+		r.Use(authn.Handler)
+
+		r.Route("/paths/{pathId}", func(r chi.Router) {
+			r.Post("/charge", h.postChargeForecast)
+			r.Post("/plan", h.postShiftPlan)
+			r.Post("/work-units", h.postWorkUnit)
+			r.Post("/release", h.postRelease)
+			r.Get("/telemetry", h.getTelemetry)
+			r.Get("/rebalance", h.getRebalance)
+			r.Get("/labor-plan-view", h.getLaborPlanView)
+		})
+
+		r.Post("/work-units/{id}/complete", h.postComplete)
+		r.Get("/work-units", h.getWorkUnitsByReference)
+
+		r.Get("/inventory-view/{sku}", h.getInventoryView)
 	})
-
-	r.Post("/work-units/{id}/complete", h.postComplete)
-	r.Get("/work-units", h.getWorkUnitsByReference)
-
-	r.Get("/inventory-view/{sku}", h.getInventoryView)
 
 	return r
 }

@@ -100,6 +100,29 @@ kafka:
   enabled: false
   brokers: "kafka:9092"
 
+# --- REST identity (ADR-0015, adopting warehouse-ops-agent ADR 0005) ---
+# Static bearer keys with read / read-write scopes protect every REST route
+# of the OLTP service and the reports reader (GET /healthz stays open).
+# mode: enforce (401/403 on failure) | log (let through, log
+# "auth: would-reject" — the rollout gate) | off (middleware disabled).
+# The binaries default to "enforce" when at least one key is configured and
+# to "off" when none is, so a chart with no keys keeps working unchanged.
+auth:
+  mode: "enforce"
+  # Bearer key granting the read scope (GET/HEAD/OPTIONS).
+  readKey: ""
+  # Bearer key granting the read-write scope (every method).
+  readWriteKey: ""
+  # Name of an existing Secret with API_READ_KEY / API_READWRITE_KEY keys.
+  # Takes precedence over readKey/readWriteKey when set.
+  existingSecret: ""
+
+# Outbound peer: inventory-storage (product classification lookup, ADR-0009).
+# apiKey is sent as "Authorization: Bearer" on every call when non-empty
+# (INVENTORY_STORAGE_API_KEY, ADR-0015).
+inventoryStorage:
+  apiKey: ""
+
 # Deployment environment, exported as the deployment.environment.name OTel
 # resource attribute (and available to anything else that wants it).
 environment: "local"

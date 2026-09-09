@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/wes-work-planning/internal/adapters/inbound/kafka"
 	"github.com/claudioed/wes-work-planning/internal/adapters/kafka/envelope"
@@ -199,7 +200,7 @@ func run() error {
 
 	var publisher ports.EventPublisher
 	var relay *postgres.OutboxRelay
-	classifications := buildClassificationLookup(getenv("PRODUCT_CLASSIFICATION_MODE", "permissive"), os.Getenv("INVENTORY_STORAGE_BASE_URL"), logger)
+	classifications := buildClassificationLookup(getenv("PRODUCT_CLASSIFICATION_MODE", "permissive"), os.Getenv("INVENTORY_STORAGE_BASE_URL"), os.Getenv("INVENTORY_STORAGE_API_KEY"), logger)
 	switch eventPublisherKind {
 	case "kafka":
 		if kafkaBrokers == "" {
@@ -257,7 +258,7 @@ func run() error {
 		GetWorkUnitsByReference: usecases.NewGetWorkUnitsByReference(workUnits),
 	}
 
-	router := inboundhttp.NewRouter(handlers, otelServiceName, logger)
+	router := inboundhttp.NewRouterWithAuth(handlers, otelServiceName, logger, buildAuthMiddleware(os.Getenv, logger))
 
 	server := &http.Server{
 		Addr:              httpAddr,
@@ -407,11 +408,33 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 // (http|permissive), defaulting to "permissive" so existing tests, CI and
 // deployments that do not set the env var are unaffected — mirroring
 // inventory-storage's own LOCATION_LOOKUP_MODE=http|permissive pattern (see
-// ADR-0009). "http" requires INVENTORY_STORAGE_BASE_URL.
-func buildClassificationLookup(mode, inventoryStorageBaseURL string, logger *slog.Logger) ports.ProductClassificationLookup {
+// ADR-0009). "http" requires INVENTORY_STORAGE_BASE_URL; an optional
+// INVENTORY_STORAGE_API_KEY is sent as a bearer credential (ADR-0015).
+func buildClassificationLookup(mode, inventoryStorageBaseURL, inventoryStorageAPIKey string, logger *slog.Logger) ports.ProductClassificationLookup {
 	if !strings.EqualFold(mode, "http") {
 		return productclassification.NewPermissiveLookup()
 	}
-	logger.Info("product classification lookup configured", "mode", "http", "inventory_storage_base_url", inventoryStorageBaseURL)
-	return productclassification.NewClient(inventoryStorageBaseURL, nil)
+	logger.Info("product classification lookup configured", "mode", "http", "inventory_storage_base_url", inventoryStorageBaseURL, "bearer", inventoryStorageAPIKey != "")
+	return productclassification.NewClient(inventoryStorageBaseURL, nil).WithBearerToken(inventoryStorageAPIKey)
+}
+
+// buildAuthMiddleware assembles the fleet-standard REST auth middleware
+// (ADR-0015): static bearer keys from API_READ_KEY / API_READWRITE_KEY
+// (falling back to MCP_READ_KEY / MCP_READWRITE_KEY), mode from AUTH_MODE.
+// The default mode is "enforce" when at least one key is configured and
+// "off" — with a loud WARN — when none is, so local runs and tests without
+// keys are unaffected. Key material is never logged.
+func buildAuthMiddleware(getenvFn func(string) string, logger *slog.Logger) auth.Middleware {
+	keys := auth.KeysFromEnv(getenvFn)
+	authn := auth.NewStaticKeyAuth(keys)
+	defaultMode := auth.ModeOff
+	if authn.HasKeys() {
+		defaultMode = auth.ModeEnforce
+	}
+	mode := auth.ParseMode(getenvFn("AUTH_MODE"), defaultMode)
+	if mode == auth.ModeOff {
+		logger.Warn("REST auth is OFF: no API_READ_KEY/API_READWRITE_KEY configured or AUTH_MODE=off")
+	}
+	logger.Info("REST auth configured", "mode", string(mode), "keys", len(keys))
+	return auth.Middleware{Authn: authn, Mode: mode, Logger: logger}
 }

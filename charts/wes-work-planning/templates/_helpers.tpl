@@ -108,3 +108,46 @@ Name of the Secret holding the MCP bearer keys (ADR-0008).
 {{- define "wes-work-planning.mcpSecretName" -}}
 {{- include "wes-work-planning.fullname" . }}-mcp
 {{- end }}
+
+{{/*
+Name of the Secret holding the REST bearer keys (ADR-0015).
+*/}}
+{{- define "wes-work-planning.authSecretName" -}}
+{{- if .Values.auth.existingSecret }}
+{{- .Values.auth.existingSecret }}
+{{- else }}
+{{- include "wes-work-planning.fullname" . }}-auth
+{{- end }}
+{{- end }}
+
+{{/*
+Whether any REST auth env should be wired (a chart-managed key or an existing Secret).
+*/}}
+{{- define "wes-work-planning.authEnabled" -}}
+{{- if or .Values.auth.readKey .Values.auth.readWriteKey .Values.auth.existingSecret -}}true{{- end -}}
+{{- end }}
+
+{{/*
+REST auth env block shared by the OLTP and reports containers (ADR-0015).
+*/}}
+{{- define "wes-work-planning.authEnv" -}}
+- name: AUTH_MODE
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "wes-work-planning.fullname" . }}
+      key: AUTH_MODE
+{{- if include "wes-work-planning.authEnabled" . }}
+- name: API_READ_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "wes-work-planning.authSecretName" . }}
+      key: API_READ_KEY
+      optional: true
+- name: API_READWRITE_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "wes-work-planning.authSecretName" . }}
+      key: API_READWRITE_KEY
+      optional: true
+{{- end }}
+{{- end }}
