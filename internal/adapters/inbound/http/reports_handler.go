@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/riandyrn/otelchi"
 
+	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	"github.com/claudioed/wes-work-planning/internal/analytics/report"
 )
 
@@ -144,10 +145,19 @@ func writeReportInternal(w http.ResponseWriter, r *http.Request, err error) {
 	})
 }
 
-// NewReportsRouter builds the chi router for the wes-reports reader service.
-// serviceName names the server in the OTel span attributes; a nil logger
-// falls back to slog.Default().
+// NewReportsRouter builds the chi router for the wes-reports reader service
+// with REST auth OFF (the shape the handler tests use). serviceName names
+// the server in the OTel span attributes; a nil logger falls back to
+// slog.Default().
 func NewReportsRouter(h *ReportsHandlers, serviceName string, logger *slog.Logger) *chi.Mux {
+	return NewReportsRouterWithAuth(h, serviceName, logger, auth.Middleware{Mode: auth.ModeOff})
+}
+
+// NewReportsRouterWithAuth is NewReportsRouter plus the fleet-standard
+// bearer middleware (ADR-0015) on every /reports route. The reports surface
+// is read-only, so the required scope is pinned to read regardless of the
+// method; GET /healthz stays open for the probes.
+func NewReportsRouterWithAuth(h *ReportsHandlers, serviceName string, logger *slog.Logger, authn auth.Middleware) *chi.Mux {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -159,8 +169,20 @@ func NewReportsRouter(h *ReportsHandlers, serviceName string, logger *slog.Logge
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", h.GetReportsHealthz)
-	r.Get("/reports/throughput", h.GetThroughput)
-	r.Get("/reports/throughput/freshness", h.GetFreshness)
+
+	if authn.ProblemBase == "" {
+		authn.ProblemBase = problemBaseURI
+	}
+	if authn.Logger == nil {
+		authn.Logger = logger
+	}
+	authn.Required = func(*http.Request) auth.Scope { return auth.ScopeRead }
+
+	r.Group(func(r chi.Router) {
+		r.Use(authn.Handler)
+		r.Get("/reports/throughput", h.GetThroughput)
+		r.Get("/reports/throughput/freshness", h.GetFreshness)
+	})
 
 	return r
 }

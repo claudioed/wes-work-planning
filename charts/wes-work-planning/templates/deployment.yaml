@@ -51,6 +51,15 @@ spec:
               value: {{ .Values.config.eventPublisher | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
+            {{- include "wes-work-planning.authEnv" . | nindent 12 }}
+            {{- if or .Values.inventoryStorage.apiKey .Values.auth.existingSecret }}
+            - name: INVENTORY_STORAGE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wes-work-planning.authSecretName" . }}
+                  key: INVENTORY_STORAGE_API_KEY
+                  optional: true
+            {{- end }}
             {{- if .Values.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

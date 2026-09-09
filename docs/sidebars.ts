@@ -98,6 +98,7 @@ const sidebars: SidebarsConfig = {
         'adr/0012-process-path-catalogue-validation',
         'adr/0013-standard-metrics-convention',
         'adr/0014-transactional-outbox',
+        'adr/0015-rest-identity-static-bearer-scopes',
       ],
     },
   ],

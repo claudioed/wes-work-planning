@@ -39,6 +39,7 @@ spec:
           env:
             - name: HTTP_ADDR
               value: {{ .Values.analytics.reports.httpAddr | quote }}
+            {{- include "wes-work-planning.authEnv" . | nindent 12 }}
             # The reports binary reads ANALYTICS_DATABASE_URL; it is fed the
             # READER (read-only) DSN so even a bug cannot mutate the read model.
             - name: ANALYTICS_DATABASE_URL
