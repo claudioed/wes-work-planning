@@ -48,10 +48,19 @@ type RebalanceDecision struct {
 	pools     ports.WorkPoolRepo
 	publisher ports.EventPublisher
 	clock     ports.Clock
+	uow       ports.UnitOfWork
 }
 
 func NewRebalanceDecision(pools ports.WorkPoolRepo, publisher ports.EventPublisher, clock ports.Clock) *RebalanceDecision {
 	return &RebalanceDecision{pools: pools, publisher: publisher, clock: clock}
+}
+
+// WithUnitOfWork commits the Publish in one atomic scope (ADR-0014). This
+// use case saves nothing, so the scope is trivial — kept uniform with every
+// other publishing use case. Optional: nil publishes directly.
+func (uc *RebalanceDecision) WithUnitOfWork(u ports.UnitOfWork) *RebalanceDecision {
+	uc.uow = u
+	return uc
 }
 
 type RebalanceDecisionRequest struct {
@@ -73,20 +82,25 @@ func (uc *RebalanceDecision) Execute(ctx context.Context, req RebalanceDecisionR
 
 	now := uc.clock.Now()
 
+	var event shared.DomainEvent
 	switch pool.Mode() {
 	case release.FlowFed:
 		if pool.IsOverAlarmThreshold() {
 			rec.Action = ThrottleUpstream
-			if err := uc.publisher.Publish(ctx, shared.NewPathThrottled(req.PathId, now)); err != nil {
-				return RebalanceRecommendation{}, err
-			}
+			event = shared.NewPathThrottled(req.PathId, now)
 		}
 	case release.ReleaseFed:
 		if pool.WIP() >= pool.WIPLimit() && pool.BacklogDepth() > 0 {
 			rec.Action = ReassignLabor
-			if err := uc.publisher.Publish(ctx, shared.NewLaborReassignmentFlagged(req.PathId, now)); err != nil {
-				return RebalanceRecommendation{}, err
-			}
+			event = shared.NewLaborReassignmentFlagged(req.PathId, now)
+		}
+	}
+	if event != nil {
+		err := atomically(ctx, uc.uow, func(ctx context.Context) error {
+			return uc.publisher.Publish(ctx, event)
+		})
+		if err != nil {
+			return RebalanceRecommendation{}, err
 		}
 	}
 

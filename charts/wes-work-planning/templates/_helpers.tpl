@@ -94,3 +94,10 @@ Name of the Secret holding the analytics DSNs, when the chart creates its own.
 {{- include "wes-work-planning.fullname" . }}-analytics
 {{- end }}
 {{- end }}
+
+{{/*
+Fully qualified name of the MCP server deployment/service (ADR-0008).
+*/}}
+{{- define "wes-work-planning.mcpFullname" -}}
+{{- include "wes-work-planning.fullname" . }}-mcp
+{{- end }}

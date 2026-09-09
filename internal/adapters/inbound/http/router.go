@@ -13,13 +13,12 @@ import (
 	otelchimetric "github.com/riandyrn/otelchi/metric"
 )
 
-// NewRouter wires every REST endpoint to its handler.
-//
-// serviceName names the server in the OTel span and metric attributes;
-// logger, when non-nil, enables the structured per-request access log. Each
-// request gets a server span named after its chi route pattern (not the raw
-// path, which would blow up span cardinality on the {pathId}/{id}/{sku}
-// segments) plus the semconv http.server.request.duration histogram.
+// NewRouter wires every REST endpoint to its handler. serviceName names the
+// server in the OTel span and metric attributes; logger, when non-nil,
+// enables the structured per-request access log. Each request gets a server
+// span named after its chi route pattern (not the raw path, which would
+// blow up span cardinality on the {pathId}/{id}/{sku} segments) plus the
+// semconv http.server.request.duration histogram.
 func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -57,9 +56,8 @@ func NewRouter(h *Handlers, serviceName string, logger *slog.Logger) *chi.Mux {
 
 // corsMiddleware allows the warehouse-console browser SPA (and this
 // service's own future MFE remote dev origin) to call this API directly
-// from the browser. Static-bearer-key auth, not cookies, so credentials
-// are never needed here. CORS_ALLOWED_ORIGINS overrides the local-dev
-// default (comma-separated) for staging/prod deployments.
+// from the browser. CORS_ALLOWED_ORIGINS overrides the local-dev default
+// (comma-separated) for staging/prod deployments.
 func corsMiddleware() func(http.Handler) http.Handler {
 	origins := []string{"http://localhost:5173", "http://localhost:5183"}
 	if v := os.Getenv("CORS_ALLOWED_ORIGINS"); v != "" {

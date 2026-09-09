@@ -39,7 +39,7 @@ func (r *ChargeRepo) Save(ctx context.Context, forecast *charge.ChargeForecast) 
 		return err
 	}
 
-	_, err = r.pool.Exec(ctx, `
+	_, err = querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO charge_forecasts (path_id, received_at, buckets)
 		VALUES ($1, $2, $3)
 		ON CONFLICT (path_id) DO UPDATE SET received_at = $2, buckets = $3
@@ -49,7 +49,7 @@ func (r *ChargeRepo) Save(ctx context.Context, forecast *charge.ChargeForecast) 
 
 func (r *ChargeRepo) FindByPathId(ctx context.Context, pathId shared.PathId) (*charge.ChargeForecast, error) {
 	var receivedAt = forecastRow{}
-	row := r.pool.QueryRow(ctx, `SELECT received_at, buckets FROM charge_forecasts WHERE path_id = $1`, pathId.String())
+	row := querierFrom(ctx, r.pool).QueryRow(ctx, `SELECT received_at, buckets FROM charge_forecasts WHERE path_id = $1`, pathId.String())
 	if err := row.Scan(&receivedAt.ReceivedAt, &receivedAt.Buckets); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ports.ErrNotFound

@@ -35,8 +35,6 @@ servers:
   - url: http://localhost:8080
     description: Local development (in-memory or Postgres adapters, see README)
 
-security: []
-
 tags:
   - name: Charge Forecast
     description: >

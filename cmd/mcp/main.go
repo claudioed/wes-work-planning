@@ -3,10 +3,6 @@
 // those to the inbound MCP adapter, then serves MCP over Streamable HTTP. It
 // is a second, independent deployable alongside cmd/wes (the HTTP service),
 // per ADR-0008.
-//
-// Auth is a static bearer key (no IdP): set MCP_READ_KEY (and optionally
-// MCP_READWRITE_KEY) from a Kubernetes Secret. A request must present a valid
-// key; the scope it grants gates the tools.
 package main
 
 import (
@@ -18,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	inboundmcp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/mcp"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/events"
@@ -117,12 +115,11 @@ func run() error {
 	}
 	server := inboundmcp.NewServer(deps)
 
-	auth := inboundmcp.NewStaticKeyAuth(authKeys(logger))
-	handler := inboundmcp.Handler(server, auth)
+	handler := inboundmcp.Handler(server)
 
 	srv := &http.Server{
 		Addr:              httpAddr,
-		Handler:           handler,
+		Handler:           newRouter(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -148,22 +145,31 @@ func run() error {
 	}
 }
 
-// authKeys reads the bearer keys from the environment. MCP_READ_KEY grants
-// read scope; MCP_READWRITE_KEY grants read-write. If neither is set the server
-// still starts but rejects every request (fail closed) — a missing key must
-// never mean "open to everyone". The keys themselves are never logged.
-func authKeys(logger *slog.Logger) map[string]inboundmcp.Scope {
-	keys := make(map[string]inboundmcp.Scope)
-	if k := os.Getenv("MCP_READ_KEY"); k != "" {
-		keys[k] = inboundmcp.ScopeRead
-	}
-	if k := os.Getenv("MCP_READWRITE_KEY"); k != "" {
-		keys[k] = inboundmcp.ScopeReadWrite
-	}
-	if len(keys) == 0 {
-		logger.Warn("no MCP_READ_KEY or MCP_READWRITE_KEY set; server will reject all requests")
-	}
-	return keys
+// newRouter wraps the authenticated MCP handler in the process's HTTP surface:
+//
+//   - GET /healthz answers 200 {"status":"ok"} WITHOUT authentication, so the
+//     Kubernetes liveness/readiness probes (which cannot carry a bearer key)
+//     can observe the process. It leaks nothing: no tool, resource, or state.
+//   - The MCP Streamable HTTP endpoint is mounted at BOTH "/" (the original
+//     root mount) and "/mcp" (warehouse-ops-agent's *_MCP_ENDPOINT convention
+//     and the docs' examples). Every other method/path on those routes still
+//     goes through the bearer check inside the handler.
+//
+// chi matches the static /healthz route before the "/" handler, so the probe
+// never reaches the auth middleware.
+func newRouter(mcpHandler http.Handler) http.Handler {
+	r := chi.NewRouter()
+	r.Get("/healthz", healthz)
+	r.Handle("/", mcpHandler)
+	r.Handle("/mcp", mcpHandler)
+	return r
+}
+
+// healthz is the unauthenticated liveness/readiness endpoint.
+func healthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 // newLogger builds the process-wide structured logger: JSON to stdout, at the

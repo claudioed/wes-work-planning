@@ -47,6 +47,22 @@ ingress:
           pathType: Prefix
   tls: []
 
+# Gateway API (HTTPRoute) as an additive, disabled-by-default alternative to
+# the Ingress above. Chart-driven mirror of the shape verified live in
+# warehouse-infra's fulfillment-execution Gateway API pilot. Flip
+# gatewayApi.enabled to true (leaving ingress.enabled as-is or false) to
+# route via Kong's Gateway API implementation instead of Ingress.
+gatewayApi:
+  enabled: false
+  parentRefs:
+    - name: ""
+      namespace: ""
+      sectionName: "http"
+  hosts:
+    - path: /
+      pathType: PathPrefix
+  stripPath: true
+
 resources:
   limits:
     cpu: 500m
@@ -100,6 +116,24 @@ otel:
 
 # Extra environment variables appended verbatim (name/value or name/valueFrom).
 extraEnv: []
+
+# ---------------------------------------------------------------------------
+# Process-path catalogue (ADR-0012 here / ADR-0017 in fulfillment-execution):
+# a boot-time-required file this binary reads via PATH_CATALOGUE_FILE.
+# warehouse-infra owns the canonical content (config/process-paths/*.yaml is
+# the fleet's published-language source of truth, shared verbatim with
+# fulfillment-execution and workforce-management) -- this chart just knows
+# how to mount whatever content it's given.
+# ---------------------------------------------------------------------------
+pathCatalogue:
+  enabled: true
+  mountPath: "/etc/wes-work-planning"
+  # Raw YAML content of the catalogue file (e.g. via --set-file or a
+  # values.yaml `content: |` block). Ignored when existingConfigMap is set.
+  content: ""
+  # Name of a pre-existing ConfigMap with a "process-paths.yaml" data key.
+  # When set, content above is ignored and no ConfigMap is created here.
+  existingConfigMap: ""
 
 livenessProbe:
   httpGet:
@@ -163,3 +197,31 @@ analytics:
       requests:
         cpu: 100m
         memory: 128Mi
+
+# --- MCP server (ADR-0008) ---
+# The Model Context Protocol server: a second deployable (cmd/mcp, Streamable
+# HTTP) that runs the same use cases as the OLTP service over the same
+# database. Disabled by default so existing releases are unaffected; set
+# mcp.enabled=true to deploy it. The MCP endpoint is served at both "/" and
+# "/mcp"; "GET /healthz" backs the probes.
+mcp:
+  enabled: false
+  replicaCount: 1
+  httpAddr: ":8090"
+  service:
+    type: ClusterIP
+    port: 8090
+    targetPort: 8090
+  # Base URL of the reports REST service for the get_release_throughput_report
+  # tool. Leave empty to auto-point at this release's reports Service when
+  # analytics.enabled=true (and register no report tool otherwise).
+  reportsBaseUrl: ""
+  # Extra environment variables for the MCP container only.
+  extraEnv: []
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

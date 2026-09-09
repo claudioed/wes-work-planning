@@ -15,6 +15,22 @@ description: "Expose this bounded context to the AI ecosystem via an MCP server 
 this record adapts that decision to the **Work Planning & Release** context and
 is bound by the estate-wide [MCP Governance Charter](../mcp/governance-charter.md).
 
+**Addendum (2026-09-07) — made deployable.** Until this date `cmd/mcp` existed
+only as code: the Dockerfile did not build it and the Helm chart had no MCP
+workload, so the server had never run in the cluster. As of 2026-09-07 the
+image ships `/app/mcp`, and `charts/wes-work-planning` gains an `mcp.*` block
+(`mcp.enabled`, default `false`) rendering a `<release>-mcp` Deployment,
+ClusterIP Service on port 8090, and a Secret carrying `MCP_READ_KEY` /
+`MCP_READWRITE_KEY`. Two small additive changes to `cmd/mcp/main.go` were
+required for that: an **unauthenticated `GET /healthz`** for the Kubernetes
+probes (the bearer middleware previously answered every request, including
+probes, with 401), and mounting the Streamable HTTP handler at **both `/` and
+`/mcp`** so warehouse-ops-agent's `*_MCP_ENDPOINT` convention
+(`http://<svc>-mcp.<ns>.svc.cluster.local:8090/mcp`) and the original root
+mount both work. Deployment to the `warehouse` cluster is driven by
+`warehouse-infra` (`mcp.enabled=true` + generated keys per service) in a
+follow-up PR there.
+
 ## Context
 
 The platform is being connected to the AI ecosystem (Claude, Cursor, ChatGPT,

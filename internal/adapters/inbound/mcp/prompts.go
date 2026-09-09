@@ -30,7 +30,7 @@ When to escalate to a human: the same path stays over its alarm threshold across
 Done means: for the path you were asked about, you have reported its backlog telemetry, the rebalance recommendation and why, any release you performed and its effect, and any escalation you are raising. Do not release work that the recommendation shows will not help.`
 
 // registerPrompts adds the workflow prompts (operational SOPs).
-func (d Deps) registerPrompts(server *mcp.Server, scopeOf func(context.Context) Scope) {
+func (d Deps) registerPrompts(server *mcp.Server) {
 	server.AddPrompt(&mcp.Prompt{
 		Name:        "balance_flow",
 		Description: "Standard operating procedure for balancing flow on a process path: read telemetry, decide when to throttle, release, or reassign, and know when to escalate.",

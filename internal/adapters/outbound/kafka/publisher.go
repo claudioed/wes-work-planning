@@ -89,7 +89,7 @@ func (p *Publisher) Close() error {
 // Publish writes one envelope per domain event inside a single
 // "kafka.publish <topic>" producer span, injecting that span's W3C trace
 // context into every message's headers so the consuming service continues
-// the same distributed trace.
+// the same distributed trace. It is Encode followed by WriteMessages.
 func (p *Publisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
 	if len(events) == 0 {
 		return nil
@@ -100,11 +100,37 @@ func (p *Publisher) Publish(ctx context.Context, events ...shared.DomainEvent) e
 	)
 	defer span.End()
 
-	msgs := make([]kafkago.Message, 0, len(events))
+	encoded, err := p.Encode(ctx, events...)
+	if err != nil {
+		return recordErr(span, err)
+	}
+
+	msgs := make([]kafkago.Message, len(encoded))
+	for i, e := range encoded {
+		// The writer pins its Topic, so the message must not (kafka-go
+		// rejects the combination); Encoded.Topic is for the relay.
+		msgs[i] = e.message(false)
+	}
+
+	span.SetAttributes(attribute.StringSlice("messaging.event_types", eventTypes(events)))
+
+	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
+		return recordErr(span, err)
+	}
+	return nil
+}
+
+// Encode builds the integration-topic wire form of every event — the
+// envelope, the enriched WorkReleased data payload (which READS the
+// WorkUnit repo, so under the transactional outbox this must run inside
+// the use case's transaction to see the just-saved row), and the W3C trace
+// headers of whatever span is active on ctx. It never touches the broker.
+func (p *Publisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
+	out := make([]Encoded, 0, len(events))
 	for _, e := range events {
 		data, err := p.dataFor(ctx, e)
 		if err != nil {
-			return recordErr(span, err)
+			return nil, err
 		}
 
 		env := envelope.Envelope{
@@ -116,20 +142,20 @@ func (p *Publisher) Publish(ctx context.Context, events ...shared.DomainEvent) e
 		}
 		body, err := json.Marshal(env)
 		if err != nil {
-			return recordErr(span, err)
+			return nil, err
 		}
 
 		msg := kafkago.Message{Key: []byte(env.EventId), Value: body}
 		otelkafka.Inject(ctx, &msg)
-		msgs = append(msgs, msg)
+		out = append(out, Encoded{
+			Topic:     envelope.TopicWorkPlanningEvents,
+			EventType: env.EventType,
+			Key:       msg.Key,
+			Value:     msg.Value,
+			Headers:   msg.Headers,
+		})
 	}
-
-	span.SetAttributes(attribute.StringSlice("messaging.event_types", eventTypes(events)))
-
-	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
-		return recordErr(span, err)
-	}
-	return nil
+	return out, nil
 }
 
 // recordErr marks span failed and returns err unchanged, so instrumentation

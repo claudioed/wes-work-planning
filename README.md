@@ -33,9 +33,10 @@ internal/
     usecases/                one struct per use case
   adapters/
     inbound/http/            REST handlers, DTOs, chi router
-    outbound/postgres/       pgx repositories + migrations
+    outbound/postgres/       pgx repositories + migrations, UnitOfWork, transactional outbox + relay (ADR-0014)
     outbound/memory/         in-memory repositories (tests/local)
-    outbound/events/         log-based event publisher (Kafka-ready interface)
+    outbound/events/         log-based event publisher + MultiPublisher (direct Kafka fan-out when no Postgres)
+    outbound/kafka/          integration + analytics publishers (also the outbox's Encoders) and the relay's RelaySink
 migrations/                  golang-migrate SQL files
 ```
 
@@ -72,8 +73,9 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 |------------------|---------|--------------------------------------------------------------------------|
 | `HTTP_ADDR`      | `:8080` | Address the HTTP server listens on                                     |
 | `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
-| `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published         |
+| `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published. With `kafka` **and** `DATABASE_URL` set, events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both Kafka topics by an in-process relay (transactional outbox, [ADR-0014](docs/docs/adr/0014-transactional-outbox.md)); with `kafka` but no `DATABASE_URL` they are published directly |
 | `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
+| `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration, e.g. `500ms`). Only used in outbox mode |
 | `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
 | `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
 | `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` reads). Loaded once at startup; a missing or invalid file is a fatal boot-time error — see [ADR-0012](docs/docs/adr/0012-process-path-catalogue-validation.md) |
@@ -123,6 +125,25 @@ The MCP server (`cmd/mcp`) exposes the read-only `get_release_throughput_report`
 tool when `REPORTS_BASE_URL` (e.g. `http://localhost:8092`) is set; it calls the
 reports REST rather than opening the analytical database.
 
+### Running the MCP server in Kubernetes
+
+The MCP server ([ADR-0008](docs/docs/adr/0008-mcp-inbound-adapter.md)) ships in
+the same image as the OLTP service (`/app/mcp`, built from `cmd/mcp`) and is
+deployed by the Helm chart as a separate Deployment + ClusterIP Service
+(`<release>-mcp`, port `8090`) when `mcp.enabled=true`. It is **off by default**.
+The binary reuses the OLTP `DATABASE_URL` secret, and — when
+`analytics.enabled=true` — is pointed at this release's reports Service so the
+report tool is registered. The Streamable HTTP endpoint is mounted at both `/`
+and `/mcp` (warehouse-ops-agent's `*_MCP_ENDPOINT` convention is
+`http://<release>-mcp.<ns>.svc.cluster.local:8090/mcp`); `GET /healthz`
+backs the liveness/readiness probes.
+
+```sh
+helm upgrade --install wes charts/wes-work-planning \
+  --set database.url="postgres://..." \
+  --set mcp.enabled=true
+```
+
 ### Analytics config
 
 | Env var | Default | Purpose |
@@ -140,7 +161,7 @@ documented exhaustively (full request/response schemas, every status code, a
 `Problem` component reused across every error response) in
 [`apis/openapi.yaml`](./apis/openapi.yaml).
 
-### Errors
+## Errors
 
 Every error response (4xx/5xx) is [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807)
 `application/problem+json`, not a bespoke shape:
