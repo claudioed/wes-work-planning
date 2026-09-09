@@ -100,29 +100,6 @@ kafka:
   enabled: false
   brokers: "kafka:9092"
 
-# --- REST identity (ADR-0015, adopting warehouse-ops-agent ADR 0005) ---
-# Static bearer keys with read / read-write scopes protect every REST route
-# of the OLTP service and the reports reader (GET /healthz stays open).
-# mode: enforce (401/403 on failure) | log (let through, log
-# "auth: would-reject" — the rollout gate) | off (middleware disabled).
-# The binaries default to "enforce" when at least one key is configured and
-# to "off" when none is, so a chart with no keys keeps working unchanged.
-auth:
-  mode: "enforce"
-  # Bearer key granting the read scope (GET/HEAD/OPTIONS).
-  readKey: ""
-  # Bearer key granting the read-write scope (every method).
-  readWriteKey: ""
-  # Name of an existing Secret with API_READ_KEY / API_READWRITE_KEY keys.
-  # Takes precedence over readKey/readWriteKey when set.
-  existingSecret: ""
-
-# Outbound peer: inventory-storage (product classification lookup, ADR-0009).
-# apiKey is sent as "Authorization: Bearer" on every call when non-empty
-# (INVENTORY_STORAGE_API_KEY, ADR-0015).
-inventoryStorage:
-  apiKey: ""
-
 # Deployment environment, exported as the deployment.environment.name OTel
 # resource attribute (and available to anything else that wants it).
 environment: "local"
@@ -225,9 +202,8 @@ analytics:
 # The Model Context Protocol server: a second deployable (cmd/mcp, Streamable
 # HTTP) that runs the same use cases as the OLTP service over the same
 # database. Disabled by default so existing releases are unaffected; set
-# mcp.enabled=true and provide at least mcp.readKey to deploy it. The MCP
-# endpoint is served at both "/" and "/mcp"; "GET /healthz" is unauthenticated
-# for the probes.
+# mcp.enabled=true to deploy it. The MCP endpoint is served at both "/" and
+# "/mcp"; "GET /healthz" backs the probes.
 mcp:
   enabled: false
   replicaCount: 1
@@ -236,11 +212,6 @@ mcp:
     type: ClusterIP
     port: 8090
     targetPort: 8090
-  # Static bearer keys (ADR-0008). Read scope grants the read tools; read-write
-  # additionally grants release_next_work. An empty key is not written to the
-  # Secret and that scope is then unobtainable (fail closed).
-  readKey: ""
-  readWriteKey: ""
   # Base URL of the reports REST service for the get_release_throughput_report
   # tool. Leave empty to auto-point at this release's reports Service when
   # analytics.enabled=true (and register no report tool otherwise).

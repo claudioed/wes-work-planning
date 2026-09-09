@@ -49,7 +49,8 @@ no scheduler).
 | [0012](./0012-process-path-catalogue-validation.md) | Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017 | Accepted |
 | [0013](./0013-standard-metrics-convention.md) | Standard metrics convention across the fleet: Tier 1 OTel baseline + Tier 2 business-metric naming | Accepted |
 | [0014](./0014-transactional-outbox.md) | Transactional outbox feeding both the integration and the analytics topic, with an in-process relay | Accepted |
-| [0015](./0015-rest-identity-static-bearer-scopes.md) | REST identity: adopt the fleet's static bearer keys with read/read-write scopes (warehouse-ops-agent ADR 0005) | Accepted |
+| [0015](./0015-rest-identity-static-bearer-scopes.md) | REST identity: adopt the fleet's static bearer keys with read/read-write scopes (warehouse-ops-agent ADR 0005) | Superseded by 0016 |
+| [0016](./0016-remove-rest-mcp-static-bearer-auth.md) | Remove the REST + MCP static-bearer auth layer (fleet decision reversed) | Accepted |
 
 ## The template
 

@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/claudioed/wes-work-planning/internal/adapters/inbound/auth"
 	inboundhttp "github.com/claudioed/wes-work-planning/internal/adapters/inbound/http"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/analyticsstore"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/telemetry"
@@ -77,7 +76,7 @@ func run() error {
 	}
 
 	handlers := &inboundhttp.ReportsHandlers{Store: analyticsstore.NewPostgresReport(pool)}
-	router := inboundhttp.NewReportsRouterWithAuth(handlers, otelServiceName, logger, buildAuthMiddleware(os.Getenv, logger))
+	router := inboundhttp.NewReportsRouter(handlers, otelServiceName, logger)
 
 	srv := &http.Server{Addr: httpAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second}
 
@@ -121,25 +120,4 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// buildAuthMiddleware assembles the fleet-standard REST auth middleware
-// (ADR-0015) for the read-only reports surface: static bearer keys from
-// API_READ_KEY / API_READWRITE_KEY (falling back to MCP_READ_KEY /
-// MCP_READWRITE_KEY), mode from AUTH_MODE. Default "enforce" when any key is
-// configured, "off" with a loud WARN when none is. Key material is never
-// logged.
-func buildAuthMiddleware(getenvFn func(string) string, logger *slog.Logger) auth.Middleware {
-	keys := auth.KeysFromEnv(getenvFn)
-	authn := auth.NewStaticKeyAuth(keys)
-	defaultMode := auth.ModeOff
-	if authn.HasKeys() {
-		defaultMode = auth.ModeEnforce
-	}
-	mode := auth.ParseMode(getenvFn("AUTH_MODE"), defaultMode)
-	if mode == auth.ModeOff {
-		logger.Warn("REST auth is OFF: no API_READ_KEY/API_READWRITE_KEY configured or AUTH_MODE=off")
-	}
-	logger.Info("REST auth configured", "mode", string(mode), "keys", len(keys))
-	return auth.Middleware{Authn: authn, Mode: mode, Logger: logger}
 }

@@ -148,39 +148,3 @@ func TestClient_GetClassification_SetsAcceptHeaderAndMethod(t *testing.T) {
 		t.Fatalf("expected Accept: application/json header")
 	}
 }
-
-// ADR-0015: the bearer credential is sent iff configured.
-func TestClient_GetClassification_BearerHeaderPresentIffConfigured(t *testing.T) {
-	t.Run("no token -> no Authorization header", func(t *testing.T) {
-		doer := &fakeDoer{resp: jsonResponse(http.StatusOK, `{"sku":"sku-1","handlingTags":[],"temperatureClass":""}`)} //nolint:bodyclose
-		client := productclassification.NewClient("http://inventory-storage.local", doer)
-		if _, err := client.GetClassification(context.Background(), "sku-1"); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got := doer.req.Header.Get("Authorization"); got != "" {
-			t.Fatalf("Authorization = %q, want none", got)
-		}
-	})
-
-	t.Run("empty/blank token -> no Authorization header", func(t *testing.T) {
-		doer := &fakeDoer{resp: jsonResponse(http.StatusOK, `{"sku":"sku-1","handlingTags":[],"temperatureClass":""}`)} //nolint:bodyclose
-		client := productclassification.NewClient("http://inventory-storage.local", doer).WithBearerToken("   ")
-		if _, err := client.GetClassification(context.Background(), "sku-1"); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got := doer.req.Header.Get("Authorization"); got != "" {
-			t.Fatalf("Authorization = %q, want none", got)
-		}
-	})
-
-	t.Run("token configured -> Authorization: Bearer <token>", func(t *testing.T) {
-		doer := &fakeDoer{resp: jsonResponse(http.StatusOK, `{"sku":"sku-1","handlingTags":[],"temperatureClass":""}`)} //nolint:bodyclose
-		client := productclassification.NewClient("http://inventory-storage.local", doer).WithBearerToken("inv-read-key")
-		if _, err := client.GetClassification(context.Background(), "sku-1"); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got := doer.req.Header.Get("Authorization"); got != "Bearer inv-read-key" {
-			t.Fatalf("Authorization = %q, want Bearer inv-read-key", got)
-		}
-	})
-}

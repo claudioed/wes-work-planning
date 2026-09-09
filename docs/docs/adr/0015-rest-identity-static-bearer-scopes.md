@@ -10,7 +10,8 @@ description: ADR 0015 — this context adopts warehouse-ops-agent ADR 0005 (flee
 
 ## Status
 
-Accepted — implemented in the same change that introduced this record.
+Superseded by [ADR-0016](./0016-remove-rest-mcp-static-bearer-auth.md) —
+implemented in the same change that introduced this record.
 
 ## Decision
 

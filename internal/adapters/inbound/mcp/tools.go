@@ -102,46 +102,41 @@ func (d Deps) releaseNextWork(ctx context.Context, in releaseNextWorkInput) (rel
 // --- registration -------------------------------------------------------------
 
 // registerTools adds every tool to the server, each wrapped so its handler
-// runs inside an OTel span named "mcp.tool <name>" and is gated by the
-// session's scope. Read tools require ScopeRead; write tools require
-// ScopeReadWrite.
-func (d Deps) registerTools(server *mcp.Server, scopeOf func(context.Context) Scope) {
+// runs inside an OTel span named "mcp.tool <name>".
+func (d Deps) registerTools(server *mcp.Server) {
 	readOnly := true
 
-	addTool(server, scopeOf, ScopeRead, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "get_backlog_telemetry",
 		Description: "Return the live backlog read model for a process path: pending backlog depth, released WIP, feed mode (ReleaseFed or FlowFed), and whether it is over its alarm threshold.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getBacklogTelemetry)
 
-	addTool(server, scopeOf, ScopeRead, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "get_rebalance_recommendation",
 		Description: "Return the Drum-Buffer-Rope flow-balancing recommendation for a process path: NoActionNeeded, ThrottleUpstream (a flow-fed path over its alarm threshold), or ReassignLabor (a release-fed path saturated at its WIP limit with work still backlogged).",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getRebalanceRecommendation)
 
-	// Write tool: releases the next priority-ordered unit into a pool. Requires
-	// the read-write scope and is annotated destructive (non-read-only,
-	// non-idempotent — each call admits a different unit) so a host can see it
-	// changes state before letting a model call it. The release policy and the
-	// pool's WIP invariant bound the risk of a mistaken call.
+	// Write tool: releases the next priority-ordered unit into a pool.
+	// Annotated destructive (non-read-only, non-idempotent — each call
+	// admits a different unit) so a host can see it changes state before
+	// letting a model call it. The release policy and the pool's WIP
+	// invariant bound the risk of a mistaken call.
 	destructive := true
 	notIdempotent := false
-	addTool(server, scopeOf, ScopeReadWrite, &mcp.Tool{
+	addTool(server, &mcp.Tool{
 		Name:        "release_next_work",
 		Description: "Release the next highest-priority (earliest-CPT) pending work unit into a process path's pool, per the release policy. Rejected if the path has no pool, the pool is empty, or a release-fed pool is already at its WIP limit. Returns the released unit's id, CPT, and reference.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &destructive, IdempotentHint: notIdempotent},
 	}, d.releaseNextWork)
 }
 
-// addTool registers one scope-gated tool. It centralises the cross-cutting
-// concerns every tool shares: a span per call, scope enforcement against the
-// tool's required minimum scope, and mapping a handler error onto the span
-// before returning it.
+// addTool registers one tool. It centralises the cross-cutting concern
+// every tool shares: a span per call, and mapping a handler error onto the
+// span before returning it.
 func addTool[In, Out any](
 	server *mcp.Server,
-	scopeOf func(context.Context) Scope,
-	required Scope,
 	tool *mcp.Tool,
 	handle func(context.Context, In) (Out, error),
 ) {
@@ -150,16 +145,9 @@ func addTool[In, Out any](
 		ctx, span := otel.Tracer(tracerName).Start(ctx, "mcp.tool "+tool.Name,
 			trace.WithAttributes(
 				attribute.String("mcp.tool.name", tool.Name),
-				attribute.String("mcp.tool.required_scope", string(required)),
 			),
 		)
 		defer span.End()
-
-		if !scopeAllows(scopeOf(ctx), required) {
-			err := fmt.Errorf("tool %q requires %s scope", tool.Name, required)
-			span.SetStatus(codes.Error, "unauthorized")
-			return nil, zero, err
-		}
 
 		out, err := handle(ctx, in)
 		if err != nil {
