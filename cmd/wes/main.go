@@ -299,7 +299,9 @@ func run() error {
 		logger.Info("consuming integration events", "brokers", kafkaBrokers)
 		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
 		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
-		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, catalogue, logger)
+		groupID := consumerGroupID(os.Getenv("KAFKA_CONSUMER_GROUP"))
+		logger.Info("kafka consumer group", "group_id", groupID)
+		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), groupID, observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, catalogue, logger)
 		go func() {
 			if err := consumer.Run(consumerCtx); err != nil {
 				logger.Error("kafka consumer stopped", "error", err)
@@ -378,6 +380,33 @@ func newEventID() string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// defaultConsumerGroup is the group id every deployed instance of this
+// service shares, so they cooperatively split the partitions of the topics
+// below -- the normal, intended behaviour for a horizontally scaled service.
+const defaultConsumerGroup = "wes-work-planning"
+
+// consumerGroupID resolves the Kafka consumer group id, allowing
+// KAFKA_CONSUMER_GROUP to override the default.
+//
+// This override exists for a specific, real failure: consumer-group offsets
+// are shared infrastructure state, not per-process state. This fleet runs ONE
+// Kafka broker platform-wide, so a second process started against it -- the
+// e2e-tests harness's local binary, or a developer's `go run` -- joins the
+// SAME group as the deployed Deployment when the id is fixed. With one
+// partition per topic, Kafka's rebalance protocol awards that partition to
+// exactly one member and the other silently consumes nothing, having been
+// told it is healthy.
+//
+// Setting a unique id (e.g. wes-work-planning-e2e-$$) isolates such a process
+// so it replays the topics itself instead of competing for them. Leaving it
+// unset preserves the shared-group behaviour deployments rely on.
+func consumerGroupID(override string) string {
+	if strings.TrimSpace(override) != "" {
+		return override
+	}
+	return defaultConsumerGroup
 }
 
 func getenv(key, fallback string) string {
