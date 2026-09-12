@@ -179,6 +179,8 @@ func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 		InstalledStations: installed,
 		Rate:              rate,
 		Hours:             body.Hours,
+		FromLocationCode:  body.FromLocationCode,
+		ToLocationCode:    body.ToLocationCode,
 	})
 	if err != nil {
 		writeError(w, r, err)
@@ -191,7 +193,7 @@ func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
-	return shiftPlanResponseDTO{
+	dto := shiftPlanResponseDTO{
 		PathId:            p.PathId().String(),
 		PlannedHeads:      p.PlannedHeads().Value(),
 		InstalledStations: p.InstalledStations().Value(),
@@ -199,6 +201,13 @@ func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
 		Hours:             p.Hours(),
 		PlannedThroughput: p.PlannedThroughput(),
 	}
+	if p.TravelDistanceKnown() {
+		metresM := p.TravelDistanceM()
+		estimated := p.TravelDistanceEstimated()
+		dto.TravelDistanceM = &metresM
+		dto.TravelDistanceEstimated = &estimated
+	}
+	return dto
 }
 
 func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {

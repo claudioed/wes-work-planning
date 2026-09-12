@@ -51,6 +51,7 @@ no scheduler).
 | [0014](./0014-transactional-outbox.md) | Transactional outbox feeding both the integration and the analytics topic, with an in-process relay | Accepted |
 | [0015](./0015-rest-identity-static-bearer-scopes.md) | REST identity: adopt the fleet's static bearer keys with read/read-write scopes (warehouse-ops-agent ADR 0005) | Superseded by 0016 |
 | [0016](./0016-remove-rest-mcp-static-bearer-auth.md) | Remove the REST + MCP static-bearer auth layer (fleet decision reversed) | Accepted |
+| [0017](./0017-travel-distance-lookup-on-commit-shift-plan.md) | Read facility-layout's travel graph once, at shift-plan-commit time, to enrich `PathPlan` | Accepted |
 
 ## The template
 

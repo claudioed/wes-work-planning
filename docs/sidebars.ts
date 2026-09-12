@@ -99,6 +99,8 @@ const sidebars: SidebarsConfig = {
         'adr/0013-standard-metrics-convention',
         'adr/0014-transactional-outbox',
         'adr/0015-rest-identity-static-bearer-scopes',
+        'adr/0016-remove-rest-mcp-static-bearer-auth',
+        'adr/0017-travel-distance-lookup-on-commit-shift-plan',
       ],
     },
   ],

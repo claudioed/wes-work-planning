@@ -28,6 +28,7 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/productclassification"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/telemetry"
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/traveldistance"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 )
@@ -200,6 +201,7 @@ func run() error {
 	var publisher ports.EventPublisher
 	var relay *postgres.OutboxRelay
 	classifications := buildClassificationLookup(getenv("PRODUCT_CLASSIFICATION_MODE", "permissive"), os.Getenv("INVENTORY_STORAGE_BASE_URL"), logger)
+	travelDistances := buildTravelDistanceLookup(getenv("TRAVEL_DISTANCE_MODE", "permissive"), os.Getenv("FACILITY_LAYOUT_BASE_URL"), logger)
 	switch eventPublisherKind {
 	case "kafka":
 		if kafkaBrokers == "" {
@@ -245,7 +247,7 @@ func run() error {
 
 	handlers := &inboundhttp.Handlers{
 		ReceiveChargeForecast:   usecases.NewReceiveChargeForecast(charges, publisher, clock).WithUnitOfWork(uow),
-		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock).WithUnitOfWork(uow),
+		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock).WithUnitOfWork(uow).WithTravelDistanceLookup(travelDistances),
 		EnqueueWorkUnit:         enqueueWorkUnit,
 		ReleaseNextWork:         usecases.NewReleaseNextWork(pools, workUnits, publisher, clock).WithUnitOfWork(uow),
 		RecordCompletion:        recordCompletion,
@@ -443,4 +445,18 @@ func buildClassificationLookup(mode, inventoryStorageBaseURL string, logger *slo
 	}
 	logger.Info("product classification lookup configured", "mode", "http", "inventory_storage_base_url", inventoryStorageBaseURL)
 	return productclassification.NewClient(inventoryStorageBaseURL, nil)
+}
+
+// buildTravelDistanceLookup selects the outbound ports.TravelDistanceLookup
+// adapter via TRAVEL_DISTANCE_MODE (http|permissive), defaulting to
+// "permissive" so existing tests, CI and deployments that do not set the
+// env var are unaffected — mirroring buildClassificationLookup's own
+// PRODUCT_CLASSIFICATION_MODE pattern exactly (see ADR-0017, Phase B3).
+// "http" requires FACILITY_LAYOUT_BASE_URL.
+func buildTravelDistanceLookup(mode, facilityLayoutBaseURL string, logger *slog.Logger) ports.TravelDistanceLookup {
+	if !strings.EqualFold(mode, "http") {
+		return traveldistance.NewPermissiveLookup()
+	}
+	logger.Info("travel distance lookup configured", "mode", "http", "facility_layout_base_url", facilityLayoutBaseURL)
+	return traveldistance.NewClient(facilityLayoutBaseURL, nil)
 }
