@@ -577,3 +577,52 @@ page from `apis/asyncapi.yaml`, the ecosystem context map, and seven
 architecture decision records. Source lives in [`docs/`](./docs) (Docusaurus);
 it is built and deployed to GitHub Pages by
 [`.github/workflows/docs.yml`](./.github/workflows/docs.yml).
+
+## Operator micro-frontend (`web/`)
+
+`web/` is `planning_mfe`, this context's Module Federation remote. It talks only to
+this service's own REST API and is never part of `make check`.
+
+**Standalone development** is unchanged:
+
+```bash
+cd web && npm install && npm run dev     # http://localhost:5183
+```
+
+**Deployed to the kind cluster**, it is built into a static bundle and served
+by its own `nginx-unprivileged` pod:
+
+```bash
+cd web
+docker build --build-context uikit=../../warehouse-ui-kit \
+  -t warehouse/wes-work-planning-frontend:local .
+```
+
+The cluster's localhost topology separates the two kinds of traffic onto two
+independent entrypoints, and neither proxies to the other:
+
+| URL | Served by | Carries |
+|---|---|---|
+| `http://localhost/mfes/wes-work-planning/` | Nginx web gateway → this remote's nginx pod | HTML, JS, CSS, fonts, `remoteEntry.js` |
+| `http://localhost:8000/api/wes-work-planning/` | Kong | this service's REST API |
+
+Kong never serves frontend assets, and the Nginx gateway never proxies an API.
+Enable the workload with `frontend.enabled=true` in the Helm chart; the Service
+is deliberately `ClusterIP` with no Ingress/HTTPRoute, because frontend path
+routing belongs to the Nginx web gateway in `warehouse-infra`.
+
+Because one image must work in more than one environment, the remote reads its
+API origin at runtime from `window.__WAREHOUSE_CONFIG__.apiOrigin` (published
+by the console shell) rather than baking a hostname in at build time. A
+production build with no runtime config **fails loudly** instead of silently
+falling back to a developer port; standalone `npm run dev` still uses
+`http://localhost:8083`. See `web/src/config.ts`.
+
+Chart invariants are asserted by:
+
+```bash
+python3 charts/wes-work-planning/tests/test_service_selectors.py
+```
+
+which proves every Service selects exactly one Deployment — the OLTP Service
+must never select the frontend, analytics or MCP pods.
