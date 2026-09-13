@@ -8,8 +8,8 @@ description: The nine past-tense domain events raised by this bounded context, w
 
 # Domain events
 
-Nine past-tense domain events are declared in
-`internal/domain/shared/events.go`. All nine implement one interface:
+Ten past-tense domain events are declared in
+`internal/domain/shared/events.go`. All ten implement one interface:
 
 ```go
 type DomainEvent interface {
@@ -35,6 +35,7 @@ exact rather than approximate.
 | `RateDeviationDetected` | *(declared; not yet raised by a use case)* | `PathId` | ⚠️ declared only |
 | `PathThrottled` | `RebalanceDecision` (flow-fed over threshold) | `PathId` | ✅ |
 | `LaborReassignmentFlagged` | `RebalanceDecision` (release-fed saturated) | `PathId` | ✅ |
+| `PathCapacityChanged` | `SampleBacklog` (only when the caller supplies `CutoffAt`) | `PathId`, `CutoffAt`, `RemainingUnits`, `Known` | ✅ |
 
 :::caution Stated honestly
 `RateDeviationDetected` is declared in the domain event catalogue and appears
@@ -113,6 +114,11 @@ deadline and the source reference, and forcing it to call back would make the
 release path synchronous across a service boundary. That enrichment happens in
 the **adapter**, not the domain event, so the domain stays ignorant of what
 downstream consumers want.
+
+`PathCapacityChanged` (ADR-0018) is the other event that carries more than a
+bare `PathId`: it is a *report*, not just a fact-of-occurrence, so it needs
+`CutoffAt`/`RemainingUnits`/`Known` to be useful to a downstream consumer
+(order-management's future `PathCapacity` adapter) at all.
 
 ## Wire format
 

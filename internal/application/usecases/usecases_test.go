@@ -373,6 +373,157 @@ func TestSampleBacklog_RaisesThresholdEvent(t *testing.T) {
 	}
 }
 
+func TestSampleBacklog_CutoffAtOmitted_DoesNotPublishCapacityEvent(t *testing.T) {
+	f := newFixture()
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := release.NewWorkPool(pathId, release.ReleaseFed, 5, 3)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	if err := pool.Enqueue("wu-1", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := f.pools.Save(context.Background(), pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	uc := usecases.NewSampleBacklog(f.pools, f.publisher, f.clock)
+	snapshot, err := uc.Execute(context.Background(), usecases.SampleBacklogRequest{PathId: pathId})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if snapshot.RemainingCapacityKnown {
+		t.Fatal("expected RemainingCapacityKnown to stay false when CutoffAt is omitted")
+	}
+	if len(f.publisher.Events()) != 0 {
+		t.Fatalf("got %d events, want 0 when CutoffAt is omitted and pool is under threshold", len(f.publisher.Events()))
+	}
+}
+
+func TestSampleBacklog_CutoffAtSupplied_ReleaseFed_PublishesPathCapacityChanged(t *testing.T) {
+	f := newFixture()
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := release.NewWorkPool(pathId, release.ReleaseFed, 5, 100)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	for _, id := range []string{"wu-1", "wu-2"} {
+		if err := pool.Enqueue(id, cpt); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if err := pool.Release("wu-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := f.pools.Save(context.Background(), pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cutoff := f.clock.Now().Add(3 * time.Hour)
+	uc := usecases.NewSampleBacklog(f.pools, f.publisher, f.clock)
+	snapshot, err := uc.Execute(context.Background(), usecases.SampleBacklogRequest{PathId: pathId, CutoffAt: cutoff})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !snapshot.RemainingCapacityKnown {
+		t.Fatal("expected RemainingCapacityKnown=true for a ReleaseFed pool with a positive WIP limit")
+	}
+	if snapshot.RemainingCapacityUnits != 4 {
+		t.Fatalf("got RemainingCapacityUnits %d, want 4 (limit 5 - WIP 1)", snapshot.RemainingCapacityUnits)
+	}
+
+	events := f.publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	capEvent, ok := events[0].(shared.PathCapacityChanged)
+	if !ok {
+		t.Fatalf("got event %T, want shared.PathCapacityChanged", events[0])
+	}
+	if !capEvent.Known {
+		t.Fatal("expected Known=true on the published event")
+	}
+	if capEvent.RemainingUnits != 4 {
+		t.Fatalf("got RemainingUnits %d, want 4", capEvent.RemainingUnits)
+	}
+	if !capEvent.CutoffAt.Equal(cutoff) {
+		t.Fatalf("got CutoffAt %v, want %v", capEvent.CutoffAt, cutoff)
+	}
+	if !capEvent.PathId.Equals(pathId) {
+		t.Fatalf("got PathId %v, want %v", capEvent.PathId, pathId)
+	}
+}
+
+func TestSampleBacklog_CutoffAtSupplied_FlowFed_PublishesUnknownCapacity(t *testing.T) {
+	f := newFixture()
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := release.NewWorkPool(pathId, release.FlowFed, 0, 100)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	if err := pool.Enqueue("wu-1", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := f.pools.Save(context.Background(), pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	uc := usecases.NewSampleBacklog(f.pools, f.publisher, f.clock)
+	cutoff := f.clock.Now().Add(time.Hour)
+	snapshot, err := uc.Execute(context.Background(), usecases.SampleBacklogRequest{PathId: pathId, CutoffAt: cutoff})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if snapshot.RemainingCapacityKnown {
+		t.Fatal("expected RemainingCapacityKnown=false for a FlowFed pool")
+	}
+
+	events := f.publisher.Events()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	capEvent, ok := events[0].(shared.PathCapacityChanged)
+	if !ok {
+		t.Fatalf("got event %T, want shared.PathCapacityChanged", events[0])
+	}
+	if capEvent.Known {
+		t.Fatal("expected Known=false for a FlowFed pool")
+	}
+	if capEvent.RemainingUnits != 0 {
+		t.Fatalf("got RemainingUnits %d, want 0 when unknown", capEvent.RemainingUnits)
+	}
+}
+
+func TestSampleBacklog_CutoffAtSupplied_AndOverThreshold_PublishesBothEventsInOneCall(t *testing.T) {
+	f := newFixture()
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := release.NewWorkPool(pathId, release.FlowFed, 0, 1)
+	cpt := shared.NewCPT(f.clock.Now().Add(time.Hour))
+	for _, id := range []string{"wu-1", "wu-2"} {
+		if err := pool.Enqueue(id, cpt); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if err := f.pools.Save(context.Background(), pool); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	uc := usecases.NewSampleBacklog(f.pools, f.publisher, f.clock)
+	cutoff := f.clock.Now().Add(time.Hour)
+	snapshot, err := uc.Execute(context.Background(), usecases.SampleBacklogRequest{PathId: pathId, CutoffAt: cutoff})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !snapshot.OverAlarmThreshold {
+		t.Fatal("expected snapshot to be over alarm threshold")
+	}
+
+	events := f.publisher.Events()
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2 (BacklogThresholdBreached + PathCapacityChanged)", len(events))
+	}
+	if _, ok := events[0].(shared.BacklogThresholdBreached); !ok {
+		t.Fatalf("got events[0] %T, want shared.BacklogThresholdBreached", events[0])
+	}
+	if _, ok := events[1].(shared.PathCapacityChanged); !ok {
+		t.Fatalf("got events[1] %T, want shared.PathCapacityChanged", events[1])
+	}
+}
+
 func TestRebalanceDecision_ReleaseFedRecommendsReassignLabor(t *testing.T) {
 	f := newFixture()
 	pathId, _ := shared.NewPathId("pick-a")

@@ -156,6 +156,7 @@ channels:
           - $ref: "#/components/messages/RateDeviationDetected"
           - $ref: "#/components/messages/PathThrottled"
           - $ref: "#/components/messages/LaborReassignmentFlagged"
+          - $ref: "#/components/messages/PathCapacityChanged"
 
 components:
   messages:
@@ -462,6 +463,75 @@ components:
             datacontenttype: application/json
             data:
               path_id: pick-to-tote
+
+    PathCapacityChanged:
+      name: PathCapacityChanged
+      title: Path Capacity Changed
+      summary: >-
+        This service reported a process path's remaining admission capacity
+        for a specific CPT cutoff window.
+      description: >-
+        Raised when `SampleBacklog` is asked (via the optional `cutoffAt`
+        query parameter on `GET /paths/{pathId}/telemetry`, see ADR-0018) to
+        report the path's currently remaining admission capacity, correlated
+        against a CPT cutoff timestamp. This PUBLISHES state this service
+        already tracks on its own `WorkPool` aggregate (`wipLimit` minus
+        current WIP) — it introduces no new domain concept or per-CPT
+        capacity bucket. `known` is `false` for a FlowFed path (no hard
+        admission ceiling — only an alarm threshold, which is not a capacity
+        figure) or a ReleaseFed path with no WIP limit provisioned; when
+        `known` is `false`, `remaining_units` is always `0`.
+
+        `cutoff_at` is this service's own native CPT currency (a concrete
+        RFC3339 timestamp), not process-path-management's site-schedule
+        `cptId` string, which this service has zero dependency on. A future
+        order-management consumer is responsible for correlating `cutoff_at`
+        against its own cached `CPTWindow.CutoffAt` (exact match or nearest-
+        window match) to resolve which `cptId` this figure applies to — see
+        ADR-0018 for the full correlation-by-timestamp design and its
+        accepted imprecision trade-off. Actively published to
+        `warehouse.work-planning.events`.
+      contentType: application/cloudevents+json
+      tags:
+        - name: workpool
+      payload:
+        $ref: "#/components/schemas/PathCapacityChangedEvent"
+      examples:
+        - name: pathCapacityChangedKnown
+          summary: >-
+            pick-to-tote (ReleaseFed, WIP limit 40, WIP 23) reports 17
+            remaining units of admission capacity for the 02:00 UTC cutoff.
+          payload:
+            specversion: "1.0"
+            id: 5c7d3f92-1b64-4a08-9e73-2f6a8c1d5b40
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workpool.PathCapacityChanged
+            subject: pick-to-tote
+            time: "2026-08-21T22:40:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pick-to-tote
+              cutoff_at: "2026-08-22T02:00:00Z"
+              remaining_units: 17
+              known: true
+        - name: pathCapacityChangedUnknownFlowFed
+          summary: >-
+            pack-singles is FlowFed (no hard admission ceiling), so capacity
+            is reported as unknown rather than derived from its alarm
+            threshold.
+          payload:
+            specversion: "1.0"
+            id: 6d8e4a03-2c75-4b19-8f84-3a7b9d2e6c51
+            source: /warehouse/wes-work-planning
+            type: com.warehouse.wes.work-planning.workpool.PathCapacityChanged
+            subject: pack-singles
+            time: "2026-08-21T22:41:00Z"
+            datacontenttype: application/json
+            data:
+              path_id: pack-singles
+              cutoff_at: "2026-08-22T03:00:00Z"
+              remaining_units: 0
+              known: false
 
   schemas:
     CloudEventBase:
@@ -827,3 +897,60 @@ components:
                   description: >-
                     Identifier of the process path labor should be moved
                     onto.
+
+    PathCapacityChangedEvent:
+      title: PathCapacityChanged CloudEvent
+      description: >-
+        CloudEvent envelope for a reported remaining-admission-capacity
+        figure for a process path, correlated against a CPT cutoff
+        timestamp (see ADR-0018).
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed event type for this message.
+              enum: ["com.warehouse.wes.work-planning.workpool.PathCapacityChanged"]
+            data:
+              type: object
+              description: Payload published by the outbound Kafka adapter.
+              required:
+                - path_id
+                - cutoff_at
+                - remaining_units
+                - known
+              properties:
+                path_id:
+                  type: string
+                  description: Identifier of the process path this capacity figure applies to.
+                cutoff_at:
+                  type: string
+                  format: date-time
+                  description: >-
+                    RFC3339 CPT cutoff timestamp this remaining-capacity
+                    figure applies to — this service's own native CPT
+                    currency, NOT process-path-management's site-schedule
+                    `cptId` string (see ADR-0018's correlation-by-timestamp
+                    discussion). A consumer must correlate this timestamp
+                    against its own cached CPT-window schedule to resolve
+                    which `cptId` it corresponds to.
+                remaining_units:
+                  type: integer
+                  format: int32
+                  description: >-
+                    How many more units this path can admit right now
+                    (WIP limit minus current WIP; always non-negative
+                    since the aggregate never admits past its own limit).
+                    Meaningful only when `known` is `true`; always `0`
+                    when `known` is `false`.
+                known:
+                  type: boolean
+                  description: >-
+                    `false` when this path is FlowFed (no hard admission
+                    ceiling — only a backlog alarm threshold, not a
+                    capacity figure) or when it is ReleaseFed with no WIP
+                    limit provisioned. `true` otherwise.

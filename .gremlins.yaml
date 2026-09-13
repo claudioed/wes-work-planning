@@ -10,6 +10,9 @@
 # Measured on 2026-08-23 with gremlins v0.6.0:
 #   ./internal/domain/release  -> 25 mutants, killed 25 / lived 0, efficacy 100.00%, 1m27s
 #   ./internal/domain          -> 51 mutants, killed 51 / lived 0, efficacy 100.00%, 2m00s
+# Re-measured 2026-09-13 after ADR-0018 (PathCapacityChanged):
+#   ./internal/domain/release  -> 36 mutants, killed 36 / lived 0, efficacy 100.00%
+#   ./internal/domain          -> 73 mutants, killed 73 / lived 0, efficacy 100.00%
 # NOTE on the comparison: gremlins fails when the MEASURED value is <= the
 # threshold (verified empirically — a run measuring 100.00% against a threshold
 # of 100 exits with "ERROR: below efficacy-threshold"), so the threshold must

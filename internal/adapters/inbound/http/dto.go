@@ -101,6 +101,14 @@ type backlogSnapshotResponseDTO struct {
 	WIP                int    `json:"wip"`
 	Mode               string `json:"mode"`
 	OverAlarmThreshold bool   `json:"overAlarmThreshold"`
+	// RemainingCapacityKnown/RemainingCapacityUnits are present only
+	// when the request supplied a `cutoffAt` query parameter (ADR-0018).
+	// RemainingCapacityUnits is additionally omitted (not present as
+	// null) when RemainingCapacityKnown is false — a FlowFed path or a
+	// ReleaseFed path with no WIP limit provisioned has no meaningful
+	// remaining-capacity figure to report.
+	RemainingCapacityKnown *bool `json:"remainingCapacityKnown,omitempty"`
+	RemainingCapacityUnits *int  `json:"remainingCapacityUnits,omitempty"`
 }
 
 type rebalanceResponseDTO struct {

@@ -101,6 +101,7 @@ const sidebars: SidebarsConfig = {
         'adr/0015-rest-identity-static-bearer-scopes',
         'adr/0016-remove-rest-mcp-static-bearer-auth',
         'adr/0017-travel-distance-lookup-on-commit-shift-plan',
+        'adr/0018-path-capacity-changed',
       ],
     },
   ],
