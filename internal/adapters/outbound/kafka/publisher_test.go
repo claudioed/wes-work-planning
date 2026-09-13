@@ -337,3 +337,55 @@ func TestPublisher_WorkReleased_GiftWrapAndFragileAreIndependent(t *testing.T) {
 		t.Fatalf("expected fragile=true (SKU-derived), got %v", data)
 	}
 }
+
+func TestPublisher_PathCapacityChanged_Known_EncodesAllFields(t *testing.T) {
+	workUnits := memory.NewWorkUnitRepo()
+	writer := &fakeWriter{}
+	pub := outboundkafka.NewPublisherWithWriter(writer, workUnits, nil, func() string { return "evt-cap-1" })
+
+	pathId, _ := shared.NewPathId("pick-a")
+	cutoff := time.Date(2026, 8, 21, 15, 0, 0, 0, time.UTC)
+	event := shared.NewPathCapacityChanged(pathId, cutoff, 17, true, time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC))
+	if err := pub.Publish(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data := decodeWorkReleasedData(t, writer.msgs[0])
+	if data["path_id"] != "pick-a" {
+		t.Fatalf("got path_id %v, want pick-a", data["path_id"])
+	}
+	if data["cutoff_at"] != "2026-08-21T15:00:00Z" {
+		t.Fatalf("got cutoff_at %v, want RFC3339 2026-08-21T15:00:00Z", data["cutoff_at"])
+	}
+	remaining, ok := data["remaining_units"].(float64)
+	if !ok || remaining != 17 {
+		t.Fatalf("got remaining_units %v, want 17", data["remaining_units"])
+	}
+	known, ok := data["known"].(bool)
+	if !ok || !known {
+		t.Fatalf("got known %v, want true", data["known"])
+	}
+}
+
+func TestPublisher_PathCapacityChanged_Unknown_EncodesFalseAndZero(t *testing.T) {
+	workUnits := memory.NewWorkUnitRepo()
+	writer := &fakeWriter{}
+	pub := outboundkafka.NewPublisherWithWriter(writer, workUnits, nil, func() string { return "evt-cap-2" })
+
+	pathId, _ := shared.NewPathId("pack-b")
+	cutoff := time.Date(2026, 8, 21, 16, 0, 0, 0, time.UTC)
+	event := shared.NewPathCapacityChanged(pathId, cutoff, 0, false, time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC))
+	if err := pub.Publish(context.Background(), event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data := decodeWorkReleasedData(t, writer.msgs[0])
+	known, ok := data["known"].(bool)
+	if !ok || known {
+		t.Fatalf("got known %v, want false", data["known"])
+	}
+	remaining, ok := data["remaining_units"].(float64)
+	if !ok || remaining != 0 {
+		t.Fatalf("got remaining_units %v, want 0", data["remaining_units"])
+	}
+}

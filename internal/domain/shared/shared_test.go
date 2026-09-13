@@ -177,6 +177,40 @@ func TestEvents(t *testing.T) {
 			t.Fatalf("got %v, want %v", ev.PathId, pathId)
 		}
 	})
+
+	t.Run("PathCapacityChanged known", func(t *testing.T) {
+		cutoff := at.Add(2 * time.Hour)
+		ev := NewPathCapacityChanged(pathId, cutoff, 42, true, at)
+		if ev.EventName() != "PathCapacityChanged" {
+			t.Fatalf("got %s, want PathCapacityChanged", ev.EventName())
+		}
+		if !ev.OccurredAt().Equal(at) {
+			t.Fatalf("got %v, want %v", ev.OccurredAt(), at)
+		}
+		if !ev.PathId.Equals(pathId) {
+			t.Fatalf("got %v, want %v", ev.PathId, pathId)
+		}
+		if !ev.CutoffAt.Equal(cutoff) {
+			t.Fatalf("got CutoffAt %v, want %v", ev.CutoffAt, cutoff)
+		}
+		if ev.RemainingUnits != 42 {
+			t.Fatalf("got RemainingUnits %d, want 42", ev.RemainingUnits)
+		}
+		if !ev.Known {
+			t.Fatalf("got Known false, want true")
+		}
+	})
+
+	t.Run("PathCapacityChanged unknown", func(t *testing.T) {
+		cutoff := at.Add(time.Hour)
+		ev := NewPathCapacityChanged(pathId, cutoff, 0, false, at)
+		if ev.Known {
+			t.Fatalf("got Known true, want false")
+		}
+		if ev.RemainingUnits != 0 {
+			t.Fatalf("got RemainingUnits %d, want 0", ev.RemainingUnits)
+		}
+	})
 }
 
 func TestPathId(t *testing.T) {

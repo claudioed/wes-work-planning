@@ -164,6 +164,42 @@ func (p *WorkPool) Release(workUnitId string) error {
 	return ErrUnknownEntry
 }
 
+// RemainingCapacity reports how many more units this pool can admit right
+// now, and whether that figure means anything (see ADR-0018).
+//
+// Known is false — and remaining is always 0 — for a FlowFed pool: FlowFed
+// pools have no hard admission ceiling, only an alarmThreshold, which is a
+// backlog alarm, not a capacity figure (see ADR-0003's flow-balancing
+// rationale: a flow-fed path "cannot refuse arrivals — a conveyor does not
+// ask permission"). Reporting a number derived from alarmThreshold here
+// would misrepresent a soft alarm as a hard ceiling to a downstream
+// consumer (order-management's promise-window calculation) that treats
+// "known" capacity as a real constraint to plan against.
+//
+// Known is also false when wipLimit is unset/zero on a ReleaseFed pool
+// (never provisioned for admission control), since a "remaining capacity
+// of 0" would be indistinguishable from a genuinely saturated pool.
+//
+// remaining is never negative: wipLimit is fixed at construction (no
+// setter exists) and both Release and ReleaseNext refuse to admit past it
+// (ErrWIPLimitReached), so WIP() can never exceed wipLimit under this
+// aggregate's own enforced invariant — there is nothing to clamp.
+//
+// The WIP limit is enforced pool-wide, not sub-allocated per CPT bucket
+// (WorkPool has no notion of a per-CPT admission ceiling — see
+// ChargeForecast for the CPT-bucketed side of the picture, which models
+// demand, not supply). RemainingCapacity therefore answers "how much more
+// can this path admit right now" independent of which CPT the caller is
+// asking about; the caller supplies the CPT purely to identify which
+// cutoff window the reported figure is being correlated against
+// (ADR-0018), not to select a different capacity number per CPT.
+func (p *WorkPool) RemainingCapacity() (remaining int, known bool) {
+	if p.mode != ReleaseFed || p.wipLimit <= 0 {
+		return 0, false
+	}
+	return p.wipLimit - p.WIP(), true
+}
+
 // Complete marks a released entry as completed, freeing its WIP slot on a
 // release-fed pool. This is the missing half of the release/complete cycle:
 // without it, a release-fed pool's WIP count only ever rises (each entry is

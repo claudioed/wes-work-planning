@@ -56,6 +56,12 @@ Topic `warehouse.work-planning.events`:
   `required_capabilities`/`fragile` from product-classification
   propagation). Consumed downstream by `fulfillment-execution` → creates a
   `Task`.
+- `PathCapacityChanged` — published when `SampleBacklog` is called with an
+  optional CPT `cutoffAt` (via `GET /paths/{pathId}/telemetry?cutoffAt=`).
+  `data`: `{"path_id","cutoff_at","remaining_units","known"}`. `known` is
+  `false` for a FlowFed path (no hard admission ceiling) or a ReleaseFed
+  path with no WIP limit provisioned. This is order-management's named
+  future real source for its `ports.PathCapacity` port (ADR-0018).
 - All other domain events are also published to this topic for
   observability; only `WorkReleased` has a live consumer today.
 
@@ -107,17 +113,18 @@ in-request. Without `DATABASE_URL`, events publish directly (no outbox).
 
 ## AsyncAPI narrative staleness — checked 2026-09 (report only, no drift found)
 
-`apis/asyncapi.yaml` declares 9 messages (`ChargeForecastReceived`,
+`apis/asyncapi.yaml` declares 10 messages (`ChargeForecastReceived`,
 `ShiftPlanCommitted`, `WorkUnitCreated`, `WorkReleased`, `WorkUnitCompleted`,
 `BacklogThresholdBreached`, `RateDeviationDetected`, `PathThrottled`,
-`LaborReassignmentFlagged`) on channel `warehouse.work-planning.events`, and
-narrative docs (`docs/docs/ddd/domain-events.md`,
-`docs/docs/api/events.md`, `docs/docs/ecosystem/integration-events.md`)
-document all 9 accurately, including the honest caveat that
-`RateDeviationDetected` is declared but not yet raised by any use case, and
-that the AsyncAPI CloudEvents envelope is the target contract while the
-running adapters use the simpler flat envelope above. This fleet documents
-AsyncAPI narratively per-service by design; the generated AsyncAPI static
-site only exists in the separate fleet-wide docs aggregator repo, not here.
+`LaborReassignmentFlagged`, `PathCapacityChanged`) on channel
+`warehouse.work-planning.events`, and narrative docs
+(`docs/docs/ddd/domain-events.md`, `docs/docs/api/events.md`,
+`docs/docs/ecosystem/integration-events.md`) document all 10 accurately,
+including the honest caveat that `RateDeviationDetected` is declared but not
+yet raised by any use case, and that the AsyncAPI CloudEvents envelope is the
+target contract while the running adapters use the simpler flat envelope
+above. This fleet documents AsyncAPI narratively per-service by design; the
+generated AsyncAPI static site only exists in the separate fleet-wide docs
+aggregator repo, not here.
 No stale narrative content found — re-check this note if messages or
 channels change in `apis/asyncapi.yaml` without a matching narrative update.

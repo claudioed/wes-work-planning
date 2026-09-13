@@ -233,6 +233,13 @@ func (p *Publisher) dataFor(ctx context.Context, e shared.DomainEvent) (json.Raw
 		return json.Marshal(map[string]any{"path_id": ev.PathId.String()})
 	case shared.WorkUnitCompleted:
 		return json.Marshal(map[string]any{"path_id": ev.PathId.String(), "work_unit_id": ev.WorkUnitId})
+	case shared.PathCapacityChanged:
+		return json.Marshal(map[string]any{
+			"path_id":         ev.PathId.String(),
+			"cutoff_at":       ev.CutoffAt.Format(time.RFC3339),
+			"remaining_units": ev.RemainingUnits,
+			"known":           ev.Known,
+		})
 	default:
 		return json.Marshal(map[string]any{})
 	}

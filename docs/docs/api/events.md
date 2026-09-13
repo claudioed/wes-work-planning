@@ -112,7 +112,7 @@ JSON block immediately above. This is documented rather than papered over.
 
 ## Events published
 
-Topic `warehouse.work-planning.events`. Nine event types are catalogued; the
+Topic `warehouse.work-planning.events`. Ten event types are catalogued; the
 `data` shape of each is below.
 
 | Event | `data` fields | Raised when |
@@ -126,6 +126,7 @@ Topic `warehouse.work-planning.events`. Nine event types are catalogued; the
 | `RateDeviationDetected` | `path_id` | *declared in the catalogue; **no use case raises it today*** |
 | `PathThrottled` | `path_id` | flow balancing decides to throttle upstream release |
 | `LaborReassignmentFlagged` | `path_id` | flow balancing recommends moving headcount |
+| `PathCapacityChanged` | `path_id`, `cutoff_at`, `remaining_units`, `known` | `SampleBacklog` is called with a `cutoffAt` query parameter (ADR-0018) |
 
 **`WorkReleased` is the only one any other service consumes today** —
 `fulfillment-execution` turns it into a `Task`. Its payload is enriched at the
@@ -236,6 +237,40 @@ for the full reasoning.
   an optional enrichment. Documented as a known gap in ADR-0009's
   Consequences, in the same spirit as inventory-storage's ADR-0003 "no
   expiry sweeper" gap.
+
+## Remaining path capacity (ADR-0018)
+
+`GET /paths/{pathId}/telemetry` accepts an optional `cutoffAt` (RFC3339)
+query parameter. When supplied, `SampleBacklog` additionally computes the
+path's current remaining admission capacity from its own `WorkPool`
+(`wipLimit - WIP`, always non-negative under the pool's own enforced
+invariant) and publishes `PathCapacityChanged` on
+this topic, correlated against the given CPT cutoff timestamp:
+
+```json
+{
+  "event_id": "5c7d3f92-1b64-4a08-9e73-2f6a8c1d5b40",
+  "event_type": "PathCapacityChanged",
+  "occurred_at": "2026-08-21T22:40:00Z",
+  "source": "wes-work-planning",
+  "data": {
+    "path_id": "pick-to-tote",
+    "cutoff_at": "2026-08-22T02:00:00Z",
+    "remaining_units": 17,
+    "known": true
+  }
+}
+```
+
+`known` is `false` (and `remaining_units` is always `0`) for a `FlowFed`
+path — it has no hard admission ceiling, only a backlog alarm threshold,
+which is not a capacity figure — or for a `ReleaseFed` path with no WIP
+limit provisioned. This is `order-management`'s named future real source
+for its `ports.PathCapacity` port (currently the `UnknownPathCapacity`
+placeholder, always `known=false`); see
+[ADR-0018](../adr/0018-path-capacity-changed.md) for the full design,
+including why correlation runs by `cutoff_at` timestamp rather than
+process-path-management's `cptId` string.
 
 ## Idempotency
 

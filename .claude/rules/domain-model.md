@@ -65,7 +65,10 @@
 `RateDeviationDetected` (declared in the catalogue and in
 `apis/asyncapi.yaml`, but no use case raises it today — stated honestly in
 `docs/docs/ddd/domain-events.md` rather than silently dropped),
-`PathThrottled`, `LaborReassignmentFlagged`.
+`PathThrottled`, `LaborReassignmentFlagged`, `PathCapacityChanged` (raised by
+`SampleBacklog` only when the caller supplies a CPT `CutoffAt` — see
+ADR-0018; reports this path's remaining admission capacity, correlated by
+CPT cutoff timestamp, for order-management's future `PathCapacity` port).
 
 `OccurredAt` on every event comes from the injected `Clock` port, never
 `time.Now()` inside the domain — event-timing assertions in tests are exact,
