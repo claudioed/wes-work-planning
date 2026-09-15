@@ -15,7 +15,9 @@ func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	// See postgres.Connect for why WithQuerySpanNamePrefix is needed with
+	// otelpgx v0.12.0+ (default flipped); kept in sync with the OLTP pool.
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithQuerySpanNamePrefix())
 	return pgxpool.NewWithConfig(ctx, cfg)
 }
 
@@ -30,7 +32,7 @@ func NewReadOnlyPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, er
 	if err != nil {
 		return nil, err
 	}
-	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithQuerySpanNamePrefix())
 	if cfg.ConnConfig.RuntimeParams == nil {
 		cfg.ConnConfig.RuntimeParams = map[string]string{}
 	}
