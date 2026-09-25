@@ -16,7 +16,11 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	// otelpgx v0.12.0 changed the default span-name prefix behavior (no
+	// longer prefixed by default); WithQuerySpanNamePrefix restores the
+	// "query "/"prepare "/"batch query " prefixing this codebase and its
+	// tests (see tracing_integration_test.go) depend on.
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithQuerySpanNamePrefix())
 
 	return pgxpool.NewWithConfig(ctx, cfg)
 }

@@ -350,6 +350,72 @@ func TestGetTelemetry_UnknownPathReturns404(t *testing.T) {
 	}
 }
 
+func TestGetTelemetry_CutoffAtOmitted_ResponseHasNoCapacityFields(t *testing.T) {
+	router := newTestRouter()
+	enqueueBody := map[string]any{
+		"workUnitId": "wu-1",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-line-1",
+	}
+	doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", enqueueBody)
+
+	rec := doJSON(t, router, http.MethodGet, "/paths/pick-a/telemetry", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := body["remainingCapacityKnown"]; ok {
+		t.Fatalf("did not expect remainingCapacityKnown when cutoffAt is omitted, got %v", body)
+	}
+	if _, ok := body["remainingCapacityUnits"]; ok {
+		t.Fatalf("did not expect remainingCapacityUnits when cutoffAt is omitted, got %v", body)
+	}
+}
+
+func TestGetTelemetry_CutoffAtSupplied_ReturnsKnownCapacity(t *testing.T) {
+	router := newTestRouter()
+	enqueueBody := map[string]any{
+		"workUnitId": "wu-1",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-line-1",
+	}
+	doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", enqueueBody)
+
+	rec := doJSON(t, router, http.MethodGet, "/paths/pick-a/telemetry?cutoffAt=2026-08-21T18:00:00Z", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	known, ok := body["remainingCapacityKnown"].(bool)
+	if !ok || !known {
+		t.Fatalf("expected remainingCapacityKnown=true (ReleaseFed default pool), got %v", body)
+	}
+	if _, ok := body["remainingCapacityUnits"]; !ok {
+		t.Fatalf("expected remainingCapacityUnits present when known=true, got %v", body)
+	}
+}
+
+func TestGetTelemetry_MalformedCutoffAtReturns400(t *testing.T) {
+	router := newTestRouter()
+	enqueueBody := map[string]any{
+		"workUnitId": "wu-1",
+		"cpt":        time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
+		"reference":  "order-line-1",
+	}
+	doJSON(t, router, http.MethodPost, "/paths/pick-a/work-units", enqueueBody)
+
+	rec := doJSON(t, router, http.MethodGet, "/paths/pick-a/telemetry?cutoffAt=not-a-date", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("got status %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestGetRebalance(t *testing.T) {
 	router := newTestRouter()
 	enqueueBody := map[string]any{

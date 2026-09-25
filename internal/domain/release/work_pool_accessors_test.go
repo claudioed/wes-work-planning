@@ -144,3 +144,75 @@ func TestWorkPool_Release_WIPLimitNotEnforced_FlowFed(t *testing.T) {
 		t.Fatalf("flow-fed pool should not enforce WIP limit on Release: %v", err)
 	}
 }
+
+func TestWorkPool_RemainingCapacity_ReleaseFed_SubtractsWIPFromLimit(t *testing.T) {
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := NewWorkPool(pathId, ReleaseFed, 5, 3)
+	cpt := shared.NewCPT(time.Now())
+
+	for _, id := range []string{"wu-1", "wu-2", "wu-3"} {
+		if err := pool.Enqueue(id, cpt); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if err := pool.Release("wu-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := pool.Release("wu-2"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	remaining, known := pool.RemainingCapacity()
+	if !known {
+		t.Fatal("expected ReleaseFed with a positive WIP limit to report known=true")
+	}
+	if remaining != 3 {
+		t.Fatalf("got remaining %d, want 3 (limit 5 - WIP 2)", remaining)
+	}
+}
+
+func TestWorkPool_RemainingCapacity_ReleaseFed_SaturatedIsZero(t *testing.T) {
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := NewWorkPool(pathId, ReleaseFed, 1, 0)
+	cpt := shared.NewCPT(time.Now())
+	if err := pool.Enqueue("wu-1", cpt); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := pool.Release("wu-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	remaining, known := pool.RemainingCapacity()
+	if !known {
+		t.Fatal("expected known=true")
+	}
+	if remaining != 0 {
+		t.Fatalf("got remaining %d, want 0 (WIP equals wipLimit)", remaining)
+	}
+}
+
+func TestWorkPool_RemainingCapacity_FlowFed_AlwaysUnknown(t *testing.T) {
+	pathId, _ := shared.NewPathId("pack-b")
+	pool := NewWorkPool(pathId, FlowFed, 0, 10)
+
+	remaining, known := pool.RemainingCapacity()
+	if known {
+		t.Fatal("expected FlowFed pool to report known=false — no hard admission ceiling")
+	}
+	if remaining != 0 {
+		t.Fatalf("got remaining %d, want 0 when unknown", remaining)
+	}
+}
+
+func TestWorkPool_RemainingCapacity_ReleaseFed_UnsetWIPLimitIsUnknown(t *testing.T) {
+	pathId, _ := shared.NewPathId("pick-a")
+	pool := NewWorkPool(pathId, ReleaseFed, 0, 0)
+
+	remaining, known := pool.RemainingCapacity()
+	if known {
+		t.Fatal("expected an unset (zero) WIP limit to report known=false")
+	}
+	if remaining != 0 {
+		t.Fatalf("got remaining %d, want 0 when unknown", remaining)
+	}
+}

@@ -53,3 +53,51 @@ func TestPathPlan_PlannedThroughput(t *testing.T) {
 		t.Fatalf("got throughput %v, want %v", got, want)
 	}
 }
+
+func TestPathPlan_TravelDistance(t *testing.T) {
+	pathId, _ := shared.NewPathId("pick-a")
+	rate, _ := shared.NewRate(50)
+	heads, _ := shared.NewStationCount(4)
+	installed, _ := shared.NewStationCount(4)
+
+	t.Run("unset by default", func(t *testing.T) {
+		p, err := NewPathPlan(pathId, heads, installed, rate, 8)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if p.TravelDistanceKnown() {
+			t.Fatal("expected TravelDistanceKnown to be false by default")
+		}
+	})
+
+	t.Run("SetTravelDistance records the hint", func(t *testing.T) {
+		p, err := NewPathPlan(pathId, heads, installed, rate, 8)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		p.SetTravelDistance(42.5, true)
+		if !p.TravelDistanceKnown() {
+			t.Fatal("expected TravelDistanceKnown to be true after SetTravelDistance")
+		}
+		if got := p.TravelDistanceM(); got != 42.5 {
+			t.Fatalf("got TravelDistanceM %v, want 42.5", got)
+		}
+		if !p.TravelDistanceEstimated() {
+			t.Fatal("expected TravelDistanceEstimated to be true")
+		}
+	})
+
+	t.Run("SetTravelDistance with a real (non-estimated) leg", func(t *testing.T) {
+		p, err := NewPathPlan(pathId, heads, installed, rate, 8)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		p.SetTravelDistance(0, false)
+		if !p.TravelDistanceKnown() {
+			t.Fatal("expected TravelDistanceKnown to be true even for a zero distance")
+		}
+		if p.TravelDistanceEstimated() {
+			t.Fatal("expected TravelDistanceEstimated to be false")
+		}
+	})
+}

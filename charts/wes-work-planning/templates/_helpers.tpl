@@ -101,3 +101,15 @@ Fully qualified name of the MCP server deployment/service (ADR-0008).
 {{- define "wes-work-planning.mcpFullname" -}}
 {{- include "wes-work-planning.fullname" . }}-mcp
 {{- end }}
+
+{{/*
+Fully qualified name of the frontend Module Federation remote deployment/service.
+
+The remote is served by its own nginx pod and reached through warehouse-infra's
+Nginx web gateway at /mfes/wes-work-planning/. It is deliberately a separate
+workload from the API: Kong never routes to it, and the OLTP Service must never
+select it.
+*/}}
+{{- define "wes-work-planning.frontendFullname" -}}
+{{- include "wes-work-planning.fullname" . }}-frontend
+{{- end }}

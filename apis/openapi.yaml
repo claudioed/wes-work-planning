@@ -372,9 +372,32 @@ paths:
         `BacklogThresholdBreached` (an existing, documented telemetry side
         effect of sampling — it does not mutate the `WorkPool` or
         `WorkUnit` aggregates themselves, so this remains a safe GET).
+
+
+        When the optional `cutoffAt` query parameter is supplied, this same
+        read additionally reports — and publishes — the path's current
+        remaining admission capacity for that CPT cutoff window
+        (`PathCapacityChanged`, see ADR-0018). `remainingCapacityKnown` is
+        `false` for a FlowFed path (no hard admission ceiling) or a
+        ReleaseFed path with no WIP limit provisioned; `remainingCapacityUnits`
+        is present only when `remainingCapacityKnown` is `true`. Omitting
+        `cutoffAt` entirely skips capacity reporting and publishing, keeping
+        every existing caller's behavior unchanged.
       tags: [Telemetry]
       parameters:
         - $ref: "#/components/parameters/PathId"
+        - name: cutoffAt
+          in: query
+          required: false
+          description: >
+            Optional RFC3339 CPT cutoff timestamp. When supplied, the
+            response additionally reports remaining admission capacity for
+            this path correlated against this cutoff, and a
+            `PathCapacityChanged` event is published (ADR-0018).
+          schema:
+            type: string
+            format: date-time
+          example: "2026-08-21T18:00:00Z"
       responses:
         "200":
           description: Current backlog snapshot.
@@ -835,6 +858,22 @@ components:
           minimum: 0
           description: Length of the shift in hours.
           example: 8
+        fromLocationCode:
+          type: string
+          description: >
+            Optional facility-layout LocationCode enriching the committed
+            plan with a real travel-distance hint (ADR-0017). Must be set
+            together with toLocationCode to attempt the lookup; either
+            omitted skips it entirely — this is a caller-opt-in
+            enrichment, not a required field.
+          example: WH1-STOR-AMB-A07-01-01-A
+        toLocationCode:
+          type: string
+          description: >
+            Optional facility-layout LocationCode enriching the committed
+            plan with a real travel-distance hint (ADR-0017). See
+            fromLocationCode.
+          example: WH1-STOR-AMB-A09-03-01-A
       required: [plannedHeads, installedStations, rateUnitsPerHour, hours]
 
     ShiftPlanResponse:
@@ -864,6 +903,27 @@ components:
           format: double
           description: plannedHeads × rateUnitsPerHour × hours.
           example: 4584
+        travelDistanceM:
+          type: number
+          format: double
+          description: >
+            The real travel distance, in metres, between fromLocationCode
+            and toLocationCode as reported by facility-layout at commit
+            time (ADR-0017). Omitted entirely — not defaulted to 0 —
+            when no travel-distance hint was recorded: either the
+            request did not supply both location codes, or the lookup
+            was unavailable/unknown/refused (e.g. the two locations sit
+            in different zones).
+          example: 4.4
+        travelDistanceEstimated:
+          type: boolean
+          description: >
+            True when the recorded travel distance used a zone's bay
+            pitch fallback rather than real aisle centreline geometry
+            (mirrors facility-layout's own TravelDistance.estimated
+            field). Omitted together with travelDistanceM when no hint
+            was recorded.
+          example: false
       required:
         - pathId
         - plannedHeads
@@ -999,6 +1059,22 @@ components:
           type: boolean
           description: Whether backlogDepth has crossed this pool's alarm threshold.
           example: false
+        remainingCapacityKnown:
+          type: boolean
+          description: >
+            Present only when the request supplied a `cutoffAt` query
+            parameter (ADR-0018). `false` for a FlowFed path (no hard
+            admission ceiling) or a ReleaseFed path with no WIP limit
+            provisioned.
+          example: true
+        remainingCapacityUnits:
+          type: integer
+          format: int32
+          description: >
+            Present only when `remainingCapacityKnown` is `true` — the
+            path's WIP limit minus its current WIP (always non-negative,
+            since the aggregate never admits past its own WIP limit).
+          example: 3
       required: [pathId, backlogDepth, wip, mode, overAlarmThreshold]
 
     RebalanceAction:

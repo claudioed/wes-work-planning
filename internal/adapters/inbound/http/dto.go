@@ -37,6 +37,12 @@ type commitShiftPlanRequestDTO struct {
 	InstalledStations int     `json:"installedStations"`
 	RateUnitsPerHour  float64 `json:"rateUnitsPerHour"`
 	Hours             float64 `json:"hours"`
+	// FromLocationCode/ToLocationCode are optional facility-layout
+	// LocationCodes enriching the committed plan with a real
+	// travel-distance hint (ADR-0017, Phase B3). Both omitted (the
+	// default) skips the enrichment entirely.
+	FromLocationCode string `json:"fromLocationCode,omitempty"`
+	ToLocationCode   string `json:"toLocationCode,omitempty"`
 }
 
 type shiftPlanResponseDTO struct {
@@ -46,6 +52,14 @@ type shiftPlanResponseDTO struct {
 	RateUnitsPerHour  float64 `json:"rateUnitsPerHour"`
 	Hours             float64 `json:"hours"`
 	PlannedThroughput float64 `json:"plannedThroughput"`
+	// TravelDistanceM/TravelDistanceEstimated are omitted entirely when
+	// no travel-distance hint was recorded (PathPlan.TravelDistanceKnown()
+	// == false) — not defaulted to 0/false, so a consumer that already
+	// treats "absent" as "no hint" sees no difference from before this
+	// feature existed (ADR-0017, Phase B3; same omit-when-unknown
+	// discipline as WorkReleased's required_capabilities/fragile, ADR-0009).
+	TravelDistanceM         *float64 `json:"travelDistanceM,omitempty"`
+	TravelDistanceEstimated *bool    `json:"travelDistanceEstimated,omitempty"`
 }
 
 type enqueueWorkUnitRequestDTO struct {
@@ -87,6 +101,14 @@ type backlogSnapshotResponseDTO struct {
 	WIP                int    `json:"wip"`
 	Mode               string `json:"mode"`
 	OverAlarmThreshold bool   `json:"overAlarmThreshold"`
+	// RemainingCapacityKnown/RemainingCapacityUnits are present only
+	// when the request supplied a `cutoffAt` query parameter (ADR-0018).
+	// RemainingCapacityUnits is additionally omitted (not present as
+	// null) when RemainingCapacityKnown is false — a FlowFed path or a
+	// ReleaseFed path with no WIP limit provisioned has no meaningful
+	// remaining-capacity figure to report.
+	RemainingCapacityKnown *bool `json:"remainingCapacityKnown,omitempty"`
+	RemainingCapacityUnits *int  `json:"remainingCapacityUnits,omitempty"`
 }
 
 type rebalanceResponseDTO struct {

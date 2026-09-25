@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -179,6 +180,8 @@ func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 		InstalledStations: installed,
 		Rate:              rate,
 		Hours:             body.Hours,
+		FromLocationCode:  body.FromLocationCode,
+		ToLocationCode:    body.ToLocationCode,
 	})
 	if err != nil {
 		writeError(w, r, err)
@@ -191,7 +194,7 @@ func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
-	return shiftPlanResponseDTO{
+	dto := shiftPlanResponseDTO{
 		PathId:            p.PathId().String(),
 		PlannedHeads:      p.PlannedHeads().Value(),
 		InstalledStations: p.InstalledStations().Value(),
@@ -199,6 +202,13 @@ func toShiftPlanResponseDTO(p plan.PathPlan) shiftPlanResponseDTO {
 		Hours:             p.Hours(),
 		PlannedThroughput: p.PlannedThroughput(),
 	}
+	if p.TravelDistanceKnown() {
+		metresM := p.TravelDistanceM()
+		estimated := p.TravelDistanceEstimated()
+		dto.TravelDistanceM = &metresM
+		dto.TravelDistanceEstimated = &estimated
+	}
+	return dto
 }
 
 func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
@@ -269,19 +279,43 @@ func (h *Handlers) getTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot, err := h.SampleBacklog.Execute(r.Context(), usecases.SampleBacklogRequest{PathId: pathId})
+	req := usecases.SampleBacklogRequest{PathId: pathId}
+	// cutoffAt is optional (ADR-0018): when supplied, this same read
+	// also reports — and publishes — the path's current remaining
+	// admission capacity correlated against that CPT cutoff. Omitted
+	// entirely (the default) keeps this endpoint's existing behavior
+	// unchanged.
+	if raw := r.URL.Query().Get("cutoffAt"); raw != "" {
+		cutoffAt, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeError(w, r, fmt.Errorf("%w: cutoffAt: %v", errMalformedBody, err))
+			return
+		}
+		req.CutoffAt = cutoffAt
+	}
+
+	snapshot, err := h.SampleBacklog.Execute(r.Context(), req)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, backlogSnapshotResponseDTO{
+	resp := backlogSnapshotResponseDTO{
 		PathId:             snapshot.PathId.String(),
 		BacklogDepth:       snapshot.BacklogDepth,
 		WIP:                snapshot.WIP,
 		Mode:               snapshot.Mode,
 		OverAlarmThreshold: snapshot.OverAlarmThreshold,
-	})
+	}
+	if !req.CutoffAt.IsZero() {
+		known := snapshot.RemainingCapacityKnown
+		resp.RemainingCapacityKnown = &known
+		if known {
+			units := snapshot.RemainingCapacityUnits
+			resp.RemainingCapacityUnits = &units
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handlers) getRebalance(w http.ResponseWriter, r *http.Request) {

@@ -51,6 +51,7 @@ page; code against the shape above if you are writing a consumer today.
 | `event_type` | `data` | Published when | Consumed by |
 |---|---|---|---|
 | `WorkReleased` | `{"path_id","work_unit_id","cpt","ref"}` | `ReleaseNextWork` releases a unit | **`fulfillment-execution`** → creates a `Task` |
+| `PathCapacityChanged` | `{"path_id","cutoff_at","remaining_units","known"}` | `SampleBacklog` is called with `cutoffAt` set (ADR-0018) | Not consumed yet — order-management's named future real source for its `ports.PathCapacity` port |
 
 ```json
 {
@@ -67,7 +68,15 @@ page; code against the shape above if you are writing a consumer today.
 }
 ```
 
-The other eight domain events are also written to this topic by the outbound
+`PathCapacityChanged` reports this path's currently remaining admission
+capacity (its `WorkPool`'s `wipLimit` minus current WIP — always
+non-negative under this aggregate's own enforced WIP-limit invariant),
+correlated against a CPT cutoff timestamp — not process-path-management's
+`cptId` string, which this service has zero dependency on. `known=false`
+for a `FlowFed` path (no hard admission ceiling) or a `ReleaseFed` path with
+no WIP limit provisioned. See [ADR-0018](../adr/0018-path-capacity-changed.md).
+
+The other seven domain events are also written to this topic by the outbound
 adapter with a `{"path_id": ...}`-shaped payload, but nothing consumes them
 today. See the [full catalogue](../api/events.md#events-published).
 

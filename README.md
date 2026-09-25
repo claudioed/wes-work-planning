@@ -75,9 +75,12 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
 | `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published. With `kafka` **and** `DATABASE_URL` set, events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both Kafka topics by an in-process relay (transactional outbox, [ADR-0014](docs/docs/adr/0014-transactional-outbox.md)); with `kafka` but no `DATABASE_URL` they are published directly |
 | `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
+| `KAFKA_CONSUMER_GROUP` | `wes-work-planning` | Kafka consumer group id. Leave unset in a deployment so replicas share one group and split the partitions. Set a unique value for any process run alongside a deployed instance against the SAME broker (the e2e-tests harness, a local `go run`) — otherwise both join the same group, Kafka awards the single partition to one of them, and the other silently consumes nothing |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration, e.g. `500ms`). Only used in outbox mode |
 | `PRODUCT_CLASSIFICATION_MODE` | `permissive` | `permissive` (default, no-op, always omits hazmat/fragile hints) or `http` — synchronous lookup of a released unit's SKU classification from inventory-storage |
 | `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
+| `TRAVEL_DISTANCE_MODE` | `permissive` | `permissive` (default, no-op, always omits the travel-distance hint) or `http` — synchronous lookup of the real travel distance between two facility-layout LocationCodes at shift-plan-commit time (ADR-0017) |
+| `FACILITY_LAYOUT_BASE_URL` | (unset) | Base URL for facility-layout's REST API; required when `TRAVEL_DISTANCE_MODE=http` |
 | `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` reads). Loaded once at startup; a missing or invalid file is a fatal boot-time error — see [ADR-0012](docs/docs/adr/0012-process-path-catalogue-validation.md) |
 
 ## Analytics data product (Release Throughput & Backlog Health)
@@ -577,3 +580,52 @@ page from `apis/asyncapi.yaml`, the ecosystem context map, and seven
 architecture decision records. Source lives in [`docs/`](./docs) (Docusaurus);
 it is built and deployed to GitHub Pages by
 [`.github/workflows/docs.yml`](./.github/workflows/docs.yml).
+
+## Operator micro-frontend (`web/`)
+
+`web/` is `planning_mfe`, this context's Module Federation remote. It talks only to
+this service's own REST API and is never part of `make check`.
+
+**Standalone development** is unchanged:
+
+```bash
+cd web && npm install && npm run dev     # http://localhost:5183
+```
+
+**Deployed to the kind cluster**, it is built into a static bundle and served
+by its own `nginx-unprivileged` pod:
+
+```bash
+cd web
+docker build --build-context uikit=../../warehouse-ui-kit \
+  -t warehouse/wes-work-planning-frontend:local .
+```
+
+The cluster's localhost topology separates the two kinds of traffic onto two
+independent entrypoints, and neither proxies to the other:
+
+| URL | Served by | Carries |
+|---|---|---|
+| `http://localhost/mfes/wes-work-planning/` | Nginx web gateway → this remote's nginx pod | HTML, JS, CSS, fonts, `remoteEntry.js` |
+| `http://localhost:8000/api/wes-work-planning/` | Kong | this service's REST API |
+
+Kong never serves frontend assets, and the Nginx gateway never proxies an API.
+Enable the workload with `frontend.enabled=true` in the Helm chart; the Service
+is deliberately `ClusterIP` with no Ingress/HTTPRoute, because frontend path
+routing belongs to the Nginx web gateway in `warehouse-infra`.
+
+Because one image must work in more than one environment, the remote reads its
+API origin at runtime from `window.__WAREHOUSE_CONFIG__.apiOrigin` (published
+by the console shell) rather than baking a hostname in at build time. A
+production build with no runtime config **fails loudly** instead of silently
+falling back to a developer port; standalone `npm run dev` still uses
+`http://localhost:8083`. See `web/src/config.ts`.
+
+Chart invariants are asserted by:
+
+```bash
+python3 charts/wes-work-planning/tests/test_service_selectors.py
+```
+
+which proves every Service selects exactly one Deployment — the OLTP Service
+must never select the frontend, analytics or MCP pods.

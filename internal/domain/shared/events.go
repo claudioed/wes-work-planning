@@ -116,3 +116,38 @@ type WorkUnitCompleted struct {
 func NewWorkUnitCompleted(workUnitId string, pathId PathId, at time.Time) WorkUnitCompleted {
 	return WorkUnitCompleted{baseEvent: baseEvent{name: "WorkUnitCompleted", at: at}, WorkUnitId: workUnitId, PathId: pathId}
 }
+
+// PathCapacityChanged is raised when this service reports a process path's
+// currently remaining admission capacity for a specific CPT cutoff window
+// (see ADR-0018). It PUBLISHES state this service already tracks on its own
+// WorkPool aggregate (wipLimit vs. current WIP) — it introduces no new
+// domain logic or per-CPT-bucket capacity concept.
+//
+// CutoffAt identifies which CPT cutoff window this reported figure applies
+// to; it is a plain time.Time (this service's own native CPT currency),
+// not a reference to process-path-management's site-schedule cptId string,
+// which this service has no dependency on (see ADR-0018's correlation-by-
+// timestamp discussion). RemainingUnits is meaningful only when Known is
+// true.
+//
+// Known is false when the path's WorkPool is FlowFed (no hard admission
+// ceiling — only an alarm threshold, which is not a capacity figure) or
+// when its WIP limit is unset/zero (never provisioned for release-fed
+// admission control). RemainingUnits is 0 whenever Known is false.
+type PathCapacityChanged struct {
+	baseEvent
+	PathId         PathId
+	CutoffAt       time.Time
+	RemainingUnits int
+	Known          bool
+}
+
+func NewPathCapacityChanged(pathId PathId, cutoffAt time.Time, remainingUnits int, known bool, at time.Time) PathCapacityChanged {
+	return PathCapacityChanged{
+		baseEvent:      baseEvent{name: "PathCapacityChanged", at: at},
+		PathId:         pathId,
+		CutoffAt:       cutoffAt,
+		RemainingUnits: remainingUnits,
+		Known:          known,
+	}
+}

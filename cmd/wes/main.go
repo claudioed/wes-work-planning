@@ -28,6 +28,7 @@ import (
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/postgres"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/productclassification"
 	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/telemetry"
+	"github.com/claudioed/wes-work-planning/internal/adapters/outbound/traveldistance"
 	"github.com/claudioed/wes-work-planning/internal/application/ports"
 	"github.com/claudioed/wes-work-planning/internal/application/usecases"
 )
@@ -200,6 +201,7 @@ func run() error {
 	var publisher ports.EventPublisher
 	var relay *postgres.OutboxRelay
 	classifications := buildClassificationLookup(getenv("PRODUCT_CLASSIFICATION_MODE", "permissive"), os.Getenv("INVENTORY_STORAGE_BASE_URL"), logger)
+	travelDistances := buildTravelDistanceLookup(getenv("TRAVEL_DISTANCE_MODE", "permissive"), os.Getenv("FACILITY_LAYOUT_BASE_URL"), logger)
 	switch eventPublisherKind {
 	case "kafka":
 		if kafkaBrokers == "" {
@@ -245,7 +247,7 @@ func run() error {
 
 	handlers := &inboundhttp.Handlers{
 		ReceiveChargeForecast:   usecases.NewReceiveChargeForecast(charges, publisher, clock).WithUnitOfWork(uow),
-		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock).WithUnitOfWork(uow),
+		CommitShiftPlan:         usecases.NewCommitShiftPlan(plans, publisher, clock).WithUnitOfWork(uow).WithTravelDistanceLookup(travelDistances),
 		EnqueueWorkUnit:         enqueueWorkUnit,
 		ReleaseNextWork:         usecases.NewReleaseNextWork(pools, workUnits, publisher, clock).WithUnitOfWork(uow),
 		RecordCompletion:        recordCompletion,
@@ -299,7 +301,9 @@ func run() error {
 		logger.Info("consuming integration events", "brokers", kafkaBrokers)
 		observeLabor := usecases.NewObserveLaborPlan(laborPlanViews, processedEvts)
 		observeInventory := usecases.NewObserveInventoryChange(inventoryViews, processedEvts)
-		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), "wes-work-planning", observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, catalogue, logger)
+		groupID := consumerGroupID(os.Getenv("KAFKA_CONSUMER_GROUP"))
+		logger.Info("kafka consumer group", "group_id", groupID)
+		consumer = inboundkafka.NewConsumer(brokerList(kafkaBrokers), groupID, observeLabor, observeInventory, recordCompletion, enqueueWorkUnit, processedEvts, catalogue, logger)
 		go func() {
 			if err := consumer.Run(consumerCtx); err != nil {
 				logger.Error("kafka consumer stopped", "error", err)
@@ -380,6 +384,33 @@ func newEventID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
+// defaultConsumerGroup is the group id every deployed instance of this
+// service shares, so they cooperatively split the partitions of the topics
+// below -- the normal, intended behaviour for a horizontally scaled service.
+const defaultConsumerGroup = "wes-work-planning"
+
+// consumerGroupID resolves the Kafka consumer group id, allowing
+// KAFKA_CONSUMER_GROUP to override the default.
+//
+// This override exists for a specific, real failure: consumer-group offsets
+// are shared infrastructure state, not per-process state. This fleet runs ONE
+// Kafka broker platform-wide, so a second process started against it -- the
+// e2e-tests harness's local binary, or a developer's `go run` -- joins the
+// SAME group as the deployed Deployment when the id is fixed. With one
+// partition per topic, Kafka's rebalance protocol awards that partition to
+// exactly one member and the other silently consumes nothing, having been
+// told it is healthy.
+//
+// Setting a unique id (e.g. wes-work-planning-e2e-$$) isolates such a process
+// so it replays the topics itself instead of competing for them. Leaving it
+// unset preserves the shared-group behaviour deployments rely on.
+func consumerGroupID(override string) string {
+	if strings.TrimSpace(override) != "" {
+		return override
+	}
+	return defaultConsumerGroup
+}
+
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -414,4 +445,18 @@ func buildClassificationLookup(mode, inventoryStorageBaseURL string, logger *slo
 	}
 	logger.Info("product classification lookup configured", "mode", "http", "inventory_storage_base_url", inventoryStorageBaseURL)
 	return productclassification.NewClient(inventoryStorageBaseURL, nil)
+}
+
+// buildTravelDistanceLookup selects the outbound ports.TravelDistanceLookup
+// adapter via TRAVEL_DISTANCE_MODE (http|permissive), defaulting to
+// "permissive" so existing tests, CI and deployments that do not set the
+// env var are unaffected — mirroring buildClassificationLookup's own
+// PRODUCT_CLASSIFICATION_MODE pattern exactly (see ADR-0017, Phase B3).
+// "http" requires FACILITY_LAYOUT_BASE_URL.
+func buildTravelDistanceLookup(mode, facilityLayoutBaseURL string, logger *slog.Logger) ports.TravelDistanceLookup {
+	if !strings.EqualFold(mode, "http") {
+		return traveldistance.NewPermissiveLookup()
+	}
+	logger.Info("travel distance lookup configured", "mode", "http", "facility_layout_base_url", facilityLayoutBaseURL)
+	return traveldistance.NewClient(facilityLayoutBaseURL, nil)
 }

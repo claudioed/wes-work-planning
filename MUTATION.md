@@ -21,14 +21,16 @@ artifact, not a code issue.
 ## Final result
 
 ```
-Killed: 51, Lived: 0, Not covered: 0
+Killed: 73, Lived: 0, Not covered: 0
 Timed out: 0, Not viable: 0, Skipped: 0
 Test efficacy: 100.00%
 Mutator coverage: 100.00%
 ```
 
-51 mutants generated across `charge`, `plan`, `release`, `shared`, and
-`workunit`; all 51 killed.
+73 mutants generated across `charge`, `plan`, `release`, `shared`, and
+`workunit`; all 73 killed. (Grew from 51 to 73 with ADR-0018's
+`WorkPool.RemainingCapacity` and `PathCapacityChanged` domain code, all of
+which is fully killed.)
 
 ## Survived mutants triaged
 

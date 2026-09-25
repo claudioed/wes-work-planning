@@ -162,7 +162,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - name: Run govulncheck
         run: govulncheck ./...
 
@@ -183,6 +183,44 @@ jobs:
         run: gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30
 
   # ============================================================
+  # CLASSIFICATION: CONTINUOUS DRIFT (advisory, weekly — never blocks a PR)
+  # ============================================================
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+      - name: Dead code (go tool deadcode, -test so test-only helpers don't false-positive)
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.35.0
+          echo "### deadcode" >> "$GITHUB_STEP_SUMMARY"
+          deadcode -test ./... | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Unused/stale go.mod entries (go mod tidy -diff)
+        run: |
+          echo "### go mod tidy -diff" >> "$GITHUB_STEP_SUMMARY"
+          go mod tidy -diff | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Unused frontend exports/files/deps (knip)
+        working-directory: web
+        run: |
+          npm ci
+          echo "### knip (web/)" >> "$GITHUB_STEP_SUMMARY"
+          npx knip --no-exit-code | tee -a "$GITHUB_STEP_SUMMARY" || true
+      - name: Coverage quality — high-coverage functions with a surviving mutant
+        run: |
+          go test ./internal/domain/... -coverprofile=/tmp/cov.out -covermode=atomic
+          go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+          gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30 > /tmp/gremlins.log 2>&1 || true
+          echo "### coverage-quality" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/coverage-quality.py /tmp/cov.out /tmp/gremlins.log | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ============================================================
   # CLASSIFICATION: LINTERS & STATIC ANALYSIS (API contracts)
   # ============================================================
   api-lint:
@@ -194,7 +232,9 @@ jobs:
         with:
           node-version: "20"
       - name: Install Spectral
-        run: npm install -g @stoplight/spectral-cli
+        run: |
+          npm ci --prefix apis/tooling
+          echo "$PWD/apis/tooling/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Lint OpenAPI spec
         run: spectral lint apis/openapi.yaml --ruleset .spectral.yaml --fail-severity=warn
       - name: Lint AsyncAPI spec
@@ -280,6 +320,32 @@ jobs:
   # Runs ONLY for a pull_request targeting main -- validated pre-merge,
   # never on develop pushes/PRs or on push-to-main (already validated).
   # ============================================================
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: wes-work-planning/web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: wes-work-planning
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: claudioed/warehouse-ui-kit
+          ref: develop
+          path: warehouse-ui-kit
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      - run: npm ci && npm run build
+        working-directory: warehouse-ui-kit
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc -b
+      - run: npm test
+      - run: npm run build
+
   trivy-scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -310,7 +376,7 @@ jobs:
           severity: 'CRITICAL,HIGH,MEDIUM'
           ignore-unfixed: true
       - name: Upload Trivy SARIF to Security tab
-        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
@@ -358,13 +424,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Install cosign
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Sign the published image (keyless, GitHub OIDC identity)
         run: |
           cosign sign --yes \
             claudioed/wes-work-planning@${{ steps.build.outputs.digest }}
       - name: Generate SBOM (SPDX) for the published image
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: claudioed/wes-work-planning@${{ steps.build.outputs.digest }}
           format: spdx-json

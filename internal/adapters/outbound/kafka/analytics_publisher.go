@@ -202,6 +202,13 @@ func marshalAnalyticsData(e shared.DomainEvent) (eventType, key string, data jso
 		return "LaborReassignmentFlagged", ev.PathId.String(), mustMarshal(map[string]any{
 			"path_id": ev.PathId.String(),
 		}), true
+	case shared.PathCapacityChanged:
+		return "PathCapacityChanged", ev.PathId.String(), mustMarshal(map[string]any{
+			"path_id":         ev.PathId.String(),
+			"cutoff_at":       ev.CutoffAt.Format(time.RFC3339),
+			"remaining_units": ev.RemainingUnits,
+			"known":           ev.Known,
+		}), true
 	default:
 		return "", "", nil, false
 	}

@@ -59,6 +59,7 @@ func TestAnalyticsPublisher_EmitsEnvelopePerEvent(t *testing.T) {
 		{"charge forecast", shared.NewChargeForecastReceived(pathId, at), "ChargeForecastReceived", "pick-zone-a", "pick-zone-a", ""},
 		{"shift plan", shared.NewShiftPlanCommitted(pathId, at), "ShiftPlanCommitted", "pick-zone-a", "pick-zone-a", ""},
 		{"labor reassign", shared.NewLaborReassignmentFlagged(pathId, at), "LaborReassignmentFlagged", "pick-zone-a", "pick-zone-a", ""},
+		{"path capacity changed", shared.NewPathCapacityChanged(pathId, at.Add(time.Hour), 4, true, at), "PathCapacityChanged", "pick-zone-a", "pick-zone-a", ""},
 	}
 
 	for _, tt := range tests {
