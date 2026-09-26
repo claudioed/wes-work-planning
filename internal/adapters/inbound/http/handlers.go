@@ -79,7 +79,9 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 func toBucketDTOs(buckets []charge.CPTBucket) []cptBucketDTO {
 	out := make([]cptBucketDTO, len(buckets))
 	for i, b := range buckets {
-		out[i] = cptBucketDTO{CPT: b.CPT.Time(), Quantity: b.Quantity.Value()}
+		cpt := b.CPT.Time()
+		qty := b.Quantity.Value()
+		out[i] = cptBucketDTO{CPT: &cpt, Quantity: &qty}
 	}
 	return out
 }
@@ -116,12 +118,20 @@ func (h *Handlers) postChargeForecast(w http.ResponseWriter, r *http.Request) {
 
 	buckets := make([]usecases.CPTBucketInput, len(body.Buckets))
 	for i, b := range body.Buckets {
-		qty, err := shared.NewQuantity(b.Quantity)
+		if b.CPT == nil {
+			writeError(w, r, fmt.Errorf("%w: buckets[%d].cpt is required", errMalformedBody, i))
+			return
+		}
+		if b.Quantity == nil {
+			writeError(w, r, fmt.Errorf("%w: buckets[%d].quantity is required", errMalformedBody, i))
+			return
+		}
+		qty, err := shared.NewQuantity(*b.Quantity)
 		if err != nil {
 			writeError(w, r, err)
 			return
 		}
-		buckets[i] = usecases.CPTBucketInput{CPT: shared.NewCPT(b.CPT), Quantity: qty}
+		buckets[i] = usecases.CPTBucketInput{CPT: shared.NewCPT(*b.CPT), Quantity: qty}
 	}
 
 	forecast, err := h.ReceiveChargeForecast.Execute(r.Context(), usecases.ReceiveChargeForecastRequest{
@@ -158,12 +168,21 @@ func (h *Handlers) postShiftPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	heads, err := shared.NewStationCount(body.PlannedHeads)
+	if body.PlannedHeads == nil {
+		writeError(w, r, fmt.Errorf("%w: plannedHeads is required", errMalformedBody))
+		return
+	}
+	if body.InstalledStations == nil {
+		writeError(w, r, fmt.Errorf("%w: installedStations is required", errMalformedBody))
+		return
+	}
+
+	heads, err := shared.NewStationCount(*body.PlannedHeads)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
-	installed, err := shared.NewStationCount(body.InstalledStations)
+	installed, err := shared.NewStationCount(*body.InstalledStations)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -226,11 +245,15 @@ func (h *Handlers) postWorkUnit(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &body) {
 		return
 	}
+	if body.CPT == nil {
+		writeError(w, r, fmt.Errorf("%w: cpt is required", errMalformedBody))
+		return
+	}
 
 	unit, err := h.EnqueueWorkUnit.Execute(r.Context(), usecases.EnqueueWorkUnitRequest{
 		WorkUnitId: body.WorkUnitId,
 		PathId:     pathId,
-		CPT:        shared.NewCPT(body.CPT),
+		CPT:        shared.NewCPT(*body.CPT),
 		Reference:  body.Reference,
 		SKU:        body.SKU,
 		GiftWrap:   body.GiftWrap,
@@ -284,8 +307,17 @@ func (h *Handlers) getTelemetry(w http.ResponseWriter, r *http.Request) {
 	// also reports — and publishes — the path's current remaining
 	// admission capacity correlated against that CPT cutoff. Omitted
 	// entirely (the default) keeps this endpoint's existing behavior
-	// unchanged.
-	if raw := r.URL.Query().Get("cutoffAt"); raw != "" {
+	// unchanged. Present-but-empty is NOT "omitted": the parameter is
+	// documented as an RFC3339 date-time, and an empty string is not
+	// one, so it is a 400 rather than silently skipping capacity
+	// reporting (Query().Get conflates absent and empty; Has tells them
+	// apart).
+	if r.URL.Query().Has("cutoffAt") {
+		raw := r.URL.Query().Get("cutoffAt")
+		if raw == "" {
+			writeError(w, r, fmt.Errorf("%w: cutoffAt is present but empty", errMalformedBody))
+			return
+		}
 		cutoffAt, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
 			writeError(w, r, fmt.Errorf("%w: cutoffAt: %v", errMalformedBody, err))
