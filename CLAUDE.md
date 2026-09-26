@@ -2,7 +2,7 @@
 
 > **Study project.** Educational DDD exercise using real WMS/WES/WCS
 > terminology (waveless release, CloudEvents, RFC 7807, hexagonal
-> architecture). Not a production system, not affiliated with Amazon or any
+> architecture). Not a production system, not affiliated with any real-world
 > company.
 
 This service is the **core domain** of a Warehouse Execution System: it turns

@@ -19,7 +19,7 @@ database and its own deployment lifecycle.
 > The WMS-tier authoritative record of **what is held where, and what portion is
 > usable.**
 
-Implements Amazon-style **chaotic (random) stow**: no fixed product location, an
+Implements e-commerce-retailer-style **chaotic (random) stow**: no fixed product location, an
 item goes to any free bin and the system records the exact bin. Its defining
 design rule is the **revocable reservation** — allocation binds a quantity to
 demand with a timeout, and revoking returns the quantity to usable, so a

@@ -13,7 +13,7 @@ description: The core bounded context of the Warehouse Execution System — the 
 This documentation site is an educational Domain-Driven Design exercise. It
 follows real industry-standard patterns and terminology, but it is **not a
 production system** and is **not affiliated with, endorsed by, or
-representative of Amazon or any other company**.
+representative of any real-world company**.
 :::
 
 This is the **core bounded context of the WES (Warehouse Execution System) tier**
