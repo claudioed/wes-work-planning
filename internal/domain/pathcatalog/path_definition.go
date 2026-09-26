@@ -33,12 +33,24 @@ import (
 var ErrUnknownPath = errors.New("pathcatalog: unknown process path id")
 
 // PathDefinition is one declared process path: its canonical id, the
-// lower-cased prefix family of real path_id values it recognizes, and
-// the capability set a station must hold to work it.
+// lower-cased prefix family of real path_id values it recognizes, the
+// capability set a station must hold to work it, and its optional
+// declared destination.
 type PathDefinition struct {
 	Id                   string
 	MatchPrefix          string
 	RequiredCapabilities []string
+	// DestinationLocationRole is process-path-management's optional,
+	// Define-time-only declaration of what kind of facility-layout
+	// LocationRole this path's completed work is destined for (Drop,
+	// WorkCenter, or Shipping — see process-path-management's own
+	// ADR-0009). The empty string means "not declared", the default and
+	// most common case — mirrored here verbatim from the upstream event
+	// payload, never validated or defaulted by this service, exactly
+	// like MatchPrefix and RequiredCapabilities are carried as declared.
+	// Available for a future consumer (e.g. destination-aware release
+	// ordering) to use; this field alone adds no such logic.
+	DestinationLocationRole string
 }
 
 // Catalogue is the validated, in-memory set of a building's declared

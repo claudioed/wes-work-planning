@@ -28,6 +28,10 @@
 // pathcatalog.PathDefinition has NO Direct field (wes-work-planning
 // never needed it) -- the Kafka payload's "direct" field is read and
 // simply discarded here, not carried into the local PathDefinition.
+// DestinationLocationRole (process-path-management's ADR-0009), by
+// contrast, IS carried into PathDefinition verbatim -- decoded here and
+// made available to any consumer of this local catalogue, even though
+// nothing in this service's own domain logic branches on it yet.
 package kafkacatalog
 
 import (
@@ -74,12 +78,16 @@ type envelope struct {
 // pathData is the payload shape for all three event types on Topic.
 // Direct is read but has no home in this service's own
 // pathcatalog.PathDefinition (see package doc comment) — it is decoded
-// and then simply discarded.
+// and then simply discarded. DestinationLocationRole is omitted by the
+// publisher (not empty-stringed) on a path with no declared destination
+// role, so its Go zero value ("") already matches "not declared" with no
+// extra handling needed here.
 type pathData struct {
-	PathId               string   `json:"path_id"`
-	MatchPrefix          string   `json:"match_prefix"`
-	Direct               bool     `json:"direct"`
-	RequiredCapabilities []string `json:"required_capabilities"`
+	PathId                  string   `json:"path_id"`
+	MatchPrefix             string   `json:"match_prefix"`
+	Direct                  bool     `json:"direct"`
+	RequiredCapabilities    []string `json:"required_capabilities"`
+	DestinationLocationRole string   `json:"destination_location_role,omitempty"`
 }
 
 // Reader is the subset of *kafkago.Reader this Consumer needs, so tests
@@ -350,9 +358,10 @@ func (c *Consumer) applyUpsert(data pathData) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.paths[strings.ToUpper(data.PathId)] = pathcatalog.PathDefinition{
-		Id:                   data.PathId,
-		MatchPrefix:          data.MatchPrefix,
-		RequiredCapabilities: data.RequiredCapabilities,
+		Id:                      data.PathId,
+		MatchPrefix:             data.MatchPrefix,
+		RequiredCapabilities:    data.RequiredCapabilities,
+		DestinationLocationRole: data.DestinationLocationRole,
 	}
 }
 

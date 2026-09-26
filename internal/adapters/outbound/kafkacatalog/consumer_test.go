@@ -172,6 +172,79 @@ func TestConsumer_Revised_UpdatesMatchPrefix(t *testing.T) {
 	}
 }
 
+// TestConsumer_Created_DecodesDestinationLocationRole proves this
+// consumer decodes process-path-management's destinationLocationRole
+// field (ADR-0009 there) from a REALISTIC ProcessPathCreated payload —
+// the exact wire shape that service's kafka publisher emits (see its
+// internal/adapters/outbound/kafka/publisher.go), not a hand-simplified
+// stand-in — and carries it into the local PathDefinition unchanged.
+func TestConsumer_Created_DecodesDestinationLocationRole(t *testing.T) {
+	realisticEnvelope := []byte(`{
+		"event_id": "6a2d3b8f-0e42-4b7c-9f1d-7c3e2f6b8a91",
+		"event_type": "ProcessPathCreated",
+		"occurred_at": "2026-09-13T00:00:00Z",
+		"source": "process-path-management",
+		"data": {
+			"path_id": "PACK",
+			"match_prefix": "pack",
+			"direct": true,
+			"required_capabilities": ["pack"],
+			"destination_location_role": "Drop",
+			"cycle_time_p95": "2h0m0s",
+			"eligibility": {}
+		}
+	}`)
+	reader := &fakeReader{messages: []kafkago.Message{{Partition: 0, Offset: 0, Value: realisticEnvelope}}}
+	c := newTestConsumer(reader, targetOffsets{0: 1})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+
+	if err := c.WaitReady(ctx); err != nil {
+		t.Fatalf("expected Ready before timeout, got: %v", err)
+	}
+
+	def, err := c.Lookup("pack")
+	if err != nil {
+		t.Fatalf("expected PACK to resolve, got: %v", err)
+	}
+	if def.DestinationLocationRole != "Drop" {
+		t.Fatalf("expected DestinationLocationRole %q, got %q", "Drop", def.DestinationLocationRole)
+	}
+}
+
+// TestConsumer_Created_OmittedDestinationLocationRole_IsEmptyString proves
+// the common case — a path with no declared destination role, which
+// process-path-management omits entirely from the wire payload rather
+// than empty-stringing (ADR-0009 there) — decodes to the Go zero value,
+// not some other sentinel, so an existing catalogue entry without this
+// field keeps behaving exactly as before this change.
+func TestConsumer_Created_OmittedDestinationLocationRole_IsEmptyString(t *testing.T) {
+	reader := &fakeReader{
+		messages: []kafkago.Message{
+			envelopeMsg(t, 0, 0, eventTypeCreated, pathData{PathId: "PICK", MatchPrefix: "pick", Direct: true, RequiredCapabilities: []string{"pick"}}),
+		},
+	}
+	c := newTestConsumer(reader, targetOffsets{0: 1})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { _ = c.Run(ctx) }()
+
+	if err := c.WaitReady(ctx); err != nil {
+		t.Fatalf("expected Ready before timeout, got: %v", err)
+	}
+
+	def, err := c.Lookup("pick")
+	if err != nil {
+		t.Fatalf("expected PICK to resolve, got: %v", err)
+	}
+	if def.DestinationLocationRole != "" {
+		t.Fatalf("expected empty DestinationLocationRole for a path with none declared, got %q", def.DestinationLocationRole)
+	}
+}
+
 func TestConsumer_UnknownEventType_IsIgnored(t *testing.T) {
 	reader := &fakeReader{
 		messages: []kafkago.Message{
