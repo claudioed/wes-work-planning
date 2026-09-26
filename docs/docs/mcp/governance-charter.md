@@ -12,8 +12,8 @@ warehouse-systems: one set of global standards, enforced the same way in every
 repository, while each bounded context owns its own server. It is the MCP
 counterpart to the platform's existing 5-stage quality gate and its ADR
 discipline. `fulfillment-execution` is the reference implementation
-(see [ADR-0008](../adr/0008-mcp-inbound-adapter.md)); the other four contexts —
-`inventory-storage`, `wes-work-planning`, `workforce-management`,
+(see [ADR-0008](../adr/0008-mcp-inbound-adapter.md)); the other contexts —
+including `inventory-storage`, `wes-work-planning`, `workforce-management`,
 `facility-layout` — copy it.
 
 Keywords **MUST**, **SHOULD**, **MAY** are used per RFC 2119.
@@ -91,6 +91,17 @@ across clients and **SHOULD** be used rather than leaving procedure implicit.
 
 ## 7. Security & authorization (current posture: no IdP)
 
+:::warning This repository's actual state
+The static-bearer layer described in rules 1–4 below was implemented and then
+**removed fleet-wide**
+([ADR-0016](../adr/0016-remove-rest-mcp-static-bearer-auth.md), superseding
+[ADR-0015](../adr/0015-rest-identity-static-bearer-scopes.md)). This
+service's `cmd/mcp` server is currently **unauthenticated**: there are no API
+keys, no read/read-write scope check, and no `401`/`403` responses. It also
+does not yet emit the per-call audit record of §9 or rate-limit write tools
+(§8.2). The rules below remain the charter's target standard.
+:::
+
 Per ADR-0008, the current posture for these internal, non-user-facing servers:
 
 1. Every request **MUST** be authenticated with a static bearer API key held in
@@ -147,5 +158,5 @@ Jaeger and Grafana alongside HTTP.
 ## 11. Changing this charter
 
 This charter is versioned with the docs. A change to a global standard **MUST**
-be proposed as a PR and, because it binds all five contexts, **SHOULD** be
+be proposed as a PR and, because it binds every context, **SHOULD** be
 recorded as an ADR when it changes an architecturally significant rule.

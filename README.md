@@ -20,7 +20,10 @@ on nothing; application depends on domain; adapters depend on
 application/domain.**
 
 ```
-cmd/wes/                     main.go — wiring/composition root
+cmd/wes/                     main.go — wiring/composition root (OLTP service)
+cmd/wes-projector/           analytics writer (ADR-0011)
+cmd/wes-reports/             analytics read-only reports API (ADR-0011)
+cmd/mcp/                     MCP server (ADR-0008)
 internal/
   domain/                    pure Go: aggregates, value objects, domain events
     charge/                  ChargeForecast aggregate
@@ -33,11 +36,19 @@ internal/
     usecases/                one struct per use case
   adapters/
     inbound/http/            REST handlers, DTOs, chi router
+    inbound/kafka/           integration-event consumer + analytics consumer (projector)
+    inbound/mcp/             MCP tools, resources, prompts
     outbound/postgres/       pgx repositories + migrations, UnitOfWork, transactional outbox + relay (ADR-0014)
     outbound/memory/         in-memory repositories (tests/local)
     outbound/events/         log-based event publisher + MultiPublisher (direct Kafka fan-out when no Postgres)
     outbound/kafka/          integration + analytics publishers (also the outbox's Encoders) and the relay's RelaySink
-migrations/                  golang-migrate SQL files
+    outbound/filecatalog/    process-path catalogue from a YAML file (PATH_CATALOGUE_SOURCE=file, ADR-0012)
+    outbound/kafkacatalog/   process-path catalogue replayed from process-path-management's topic (PATH_CATALOGUE_SOURCE=kafka)
+    outbound/productclassification/  inventory-storage classification lookup (ADR-0009)
+    outbound/traveldistance/ facility-layout travel-distance lookup (ADR-0017)
+    outbound/analyticsstore/ analytics Postgres projection + report reader
+    outbound/telemetry/      OpenTelemetry setup
+migrations/                  golang-migrate SQL files (OLTP; migrations/analytics/ for the projector)
 ```
 
 The domain package imports nothing outside the Go standard library. The
@@ -46,6 +57,18 @@ defines. Adapters are the only layer allowed to import a framework, a SQL
 driver, or an HTTP router.
 
 ## Running
+
+Every run needs a **process-path catalogue** (ADR-0012). With the default
+`PATH_CATALOGUE_SOURCE=file` the service reads the YAML at
+`PATH_CATALOGUE_FILE` (default `/etc/wes-work-planning/process-paths.yaml`) and
+refuses to start if it is missing or invalid. Locally, point it at
+`warehouse-infra`'s `config/process-paths/sortable-fc.yaml` (it declares the
+`pick`, `pack`, `rebin` and `slam` prefixes, so `pick-a` below is a known path;
+an unknown path id is rejected with `400 unknown-path-id`):
+
+```sh
+export PATH_CATALOGUE_FILE=../warehouse-infra/config/process-paths/sortable-fc.yaml
+```
 
 ### Option 1 — in-memory (no database)
 
@@ -59,13 +82,13 @@ restart) — good for trying the API without any infrastructure.
 ### Option 2 — Postgres
 
 ```sh
-docker compose up -d
-
-# apply migrations (requires the golang-migrate CLI: https://github.com/golang-migrate/migrate)
-migrate -path migrations -database "postgres://wes:wes@localhost:5432/wes?sslmode=disable" up
+docker compose up -d   # Postgres only
 
 DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cmd/wes
 ```
+
+`cmd/wes` applies the OLTP migrations in `MIGRATIONS_PATH` itself before it
+opens the pool, so there is no separate `migrate` step.
 
 ### Config
 
@@ -73,6 +96,7 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 |------------------|---------|--------------------------------------------------------------------------|
 | `HTTP_ADDR`      | `:8080` | Address the HTTP server listens on                                     |
 | `DATABASE_URL`   | (unset) | Postgres DSN; falls back to in-memory if unset                         |
+| `MIGRATIONS_PATH` | `migrations` | Directory of OLTP migrations applied on start when `DATABASE_URL` is set |
 | `EVENT_PUBLISHER`| `log`   | `log` (default) or `kafka` — where domain events get published. With `kafka` **and** `DATABASE_URL` set, events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both Kafka topics by an in-process relay (transactional outbox, [ADR-0014](docs/docs/adr/0014-transactional-outbox.md)); with `kafka` but no `DATABASE_URL` they are published directly |
 | `KAFKA_BROKERS`  | (unset) | Comma-separated Kafka brokers; required for `EVENT_PUBLISHER=kafka` and enables the inbound integration-event consumer whenever set |
 | `KAFKA_CONSUMER_GROUP` | `wes-work-planning` | Kafka consumer group id. Leave unset in a deployment so replicas share one group and split the partitions. Set a unique value for any process run alongside a deployed instance against the SAME broker (the e2e-tests harness, a local `go run`) — otherwise both join the same group, Kafka awards the single partition to one of them, and the other silently consumes nothing |
@@ -81,7 +105,9 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `INVENTORY_STORAGE_BASE_URL` | (unset) | Base URL for inventory-storage's REST API; required when `PRODUCT_CLASSIFICATION_MODE=http` |
 | `TRAVEL_DISTANCE_MODE` | `permissive` | `permissive` (default, no-op, always omits the travel-distance hint) or `http` — synchronous lookup of the real travel distance between two facility-layout LocationCodes at shift-plan-commit time (ADR-0017) |
 | `FACILITY_LAYOUT_BASE_URL` | (unset) | Base URL for facility-layout's REST API; required when `TRAVEL_DISTANCE_MODE=http` |
-| `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` reads). Loaded once at startup; a missing or invalid file is a fatal boot-time error — see [ADR-0012](docs/docs/adr/0012-process-path-catalogue-validation.md) |
+| `PATH_CATALOGUE_SOURCE` | `file` | `file` (default) reads `PATH_CATALOGUE_FILE` once at boot; `kafka` (requires `KAFKA_BROKERS`) replays process-path-management's `warehouse.process-path-management.events` topic into an in-memory catalogue, blocks startup until the replay completes, then keeps it current live. The replay uses its own per-process consumer group, independent of `KAFKA_CONSUMER_GROUP` |
+| `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` reads). Used only when `PATH_CATALOGUE_SOURCE=file`; loaded once at startup, and a missing or invalid file is a fatal boot-time error — see [ADR-0012](docs/docs/adr/0012-process-path-catalogue-validation.md) |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5183` | Comma-separated browser origins allowed by the REST CORS middleware |
 
 ## Analytics data product (Release Throughput & Backlog Health)
 
@@ -103,7 +129,7 @@ Three processes, one writer:
   `GET /reports/throughput/freshness` over a read-only pool.
 
 ```sh
-docker compose up -d   # Kafka + Postgres
+docker compose up -d   # Postgres only; Kafka is the shared broker on localhost:9092
 
 # Create a separate analytical database (baseline: same Postgres release), then:
 export ANALYTICS_DATABASE_URL="postgres://wes:***@localhost:5432/wes_analytics?sslmode=disable"
@@ -241,10 +267,15 @@ Fails with `409` if the unit was never released, or already completed.
 
 ```sh
 curl localhost:8080/paths/pick-a/telemetry
+curl "localhost:8080/paths/pick-a/telemetry?cutoffAt=2026-08-21T12:00:00Z"
 ```
 
 Returns backlog depth, WIP, feed mode, and whether the path is over its
 alarm threshold. Publishes `BacklogThresholdBreached` when over threshold.
+With the optional `cutoffAt` (RFC3339) it also returns
+`remainingCapacityKnown`/`remainingCapacityUnits` and publishes
+`PathCapacityChanged` for that (path, CPT cutoff) pair — see
+[ADR-0018](docs/docs/adr/0018-path-capacity-changed.md).
 
 ### `GET /paths/{pathId}/rebalance` — RebalanceDecision
 
@@ -266,6 +297,15 @@ The latest labor plan Workforce Management reported for this path, projected
 from its `ShiftPlanCommitted` integration event. See **Integration** below —
 this is a separate read model from this service's own `ShiftPlan` aggregate.
 `404` if nothing has been observed yet.
+
+### `GET /work-units?reference=` — GetWorkUnitsByReference
+
+```sh
+curl "localhost:8080/work-units?reference=order-line-1"
+```
+
+Every work unit ever enqueued with that `reference` (order-management's order
+id), as an array. Read-only; an unknown reference returns `200` with `[]`.
 
 ### `GET /inventory-view/{sku}` — InventoryView (read model)
 
@@ -316,20 +356,21 @@ go vet ./...
 go test ./...
 ```
 
-Postgres repositories have a build-tagged integration test suite that is
-skipped unless `DATABASE_URL` is set:
+Integration tests are build-tagged (`-tags=integration`). The Kafka suites
+(`internal/adapters/inbound/kafka`, `internal/adapters/outbound/kafkacatalog`)
+and the Postgres outbox/migration suites start their own brokers and databases
+with testcontainers, so they need Docker but no environment variables:
+
+```sh
+go test -tags=integration ./...
+```
+
+The older Postgres repository suite (`integration_test.go`,
+`tracing_integration_test.go`) is still skipped unless `DATABASE_URL` is set:
 
 ```sh
 DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" \
   go test -tags=integration ./internal/adapters/outbound/postgres/...
-```
-
-The Kafka consumer has a build-tagged integration test suite that is skipped
-unless `KAFKA_BROKERS` is set (see **Integration** below):
-
-```sh
-KAFKA_BROKERS="localhost:9092" \
-  go test -tags=integration ./internal/adapters/inbound/kafka/...
 ```
 
 ### BDD / Acceptance tests
@@ -353,8 +394,9 @@ them in the `bdd` job.
 
 This service both publishes and consumes integration events over Kafka
 (`github.com/segmentio/kafka-go`), on the shared broker other warehouse-systems
-services also use (`~/warehouse-systems/docker-compose.kafka.yml`,
-`localhost:9092` by default). Every service uses the same envelope:
+services also use — the in-cluster Kafka release in the `warehouse` kind
+cluster, reachable from the host at `localhost:9092`. This repo's
+`docker-compose.yml` runs Postgres only. Every service uses the same envelope:
 
 ```json
 {
@@ -382,6 +424,15 @@ Topic `warehouse.work-planning.events`:
   `GET /products/{sku}/classification` at publish time — see
   [ADR-0009](./docs/docs/adr/0009-product-classification-propagation-to-work-released.md).
   Both fields are omitted, not defaulted to empty/false, when unavailable.
+- **`PathCapacityChanged`** — published when `SampleBacklog` is called with a
+  `cutoffAt` (`GET /paths/{pathId}/telemetry?cutoffAt=`). `data`:
+  `{"path_id","cutoff_at","remaining_units","known"}` — remaining admission
+  capacity per (path, CPT cutoff). Consumed by order-management's
+  `kafkapathcapacity` adapter (its `PathCapacity` port, keyed by path and
+  cutoff instant) — see [ADR-0018](./docs/docs/adr/0018-path-capacity-changed.md).
+
+The other domain events are published to the same topic with a
+`{"path_id", ...}` payload; no other service consumes them today.
 
 Set `EVENT_PUBLISHER=kafka` (and `KAFKA_BROKERS`) to publish here instead of
 the default `log` publisher; `internal/adapters/outbound/kafka` implements the
@@ -422,7 +473,14 @@ same `ports.EventPublisher` interface the log publisher does.
   downstream progress, same as for every other `EnqueueWorkUnit` caller.
 
 Setting `KAFKA_BROKERS` starts this consumer automatically, independent of
-`EVENT_PUBLISHER`.
+`EVENT_PUBLISHER`, under the consumer group `KAFKA_CONSUMER_GROUP` (default
+`wes-work-planning`).
+
+With `PATH_CATALOGUE_SOURCE=kafka`, a separate consumer also replays
+process-path-management's `warehouse.process-path-management.events`
+(`ProcessPathCreated`/`ProcessPathUpdated`/`ProcessPathDeactivated`) into the
+in-memory process-path catalogue that validates every `pathId`. It uses its own
+per-process consumer group so every process replays the full history.
 
 ### Idempotency
 
@@ -438,13 +496,13 @@ second, independent safety net, not a substitute for it.
 
 ### Smoke-testing against the shared broker
 
-With the shared broker running (`docker compose -f
-~/warehouse-systems/docker-compose.kafka.yml up -d`) and this service running
-with `KAFKA_BROKERS` set:
+With the `warehouse` kind cluster running and this service running locally
+with `KAFKA_BROKERS=localhost:9092` and a unique `KAFKA_CONSUMER_GROUP` (so it
+does not compete with the deployed pod for the partition):
 
 ```sh
-docker exec -i warehouse-kafka /opt/kafka/bin/kafka-console-producer.sh \
-  --broker-list localhost:9092 --topic warehouse.workforce.events <<'EOF'
+kubectl --context kind-warehouse -n warehouse-systems exec -i kafka-controller-0 -c kafka -- \
+  kafka-console-producer.sh --bootstrap-server localhost:9092 --topic warehouse.workforce.events <<'EOF'
 {"event_id":"evt-1","event_type":"ShiftPlanCommitted","occurred_at":"2026-08-21T20:00:00Z","source":"workforce-management","data":{"building_id":"bldg-1","shift_id":"shift-1","path_id":"pick-a","planned_heads":7,"planned_rate":95.5,"planned_hours":8}}
 EOF
 
@@ -463,8 +521,8 @@ curl -X POST localhost:8080/paths/pick-a/work-units \
   -d '{"workUnitId":"wu-1","cpt":"2026-08-21T23:00:00Z","reference":"ref-1"}'
 curl -X POST localhost:8080/paths/pick-a/release
 
-docker exec -i warehouse-kafka /opt/kafka/bin/kafka-console-producer.sh \
-  --broker-list localhost:9092 --topic warehouse.fulfillment.events <<'EOF'
+kubectl --context kind-warehouse -n warehouse-systems exec -i kafka-controller-0 -c kafka -- \
+  kafka-console-producer.sh --bootstrap-server localhost:9092 --topic warehouse.fulfillment.events <<'EOF'
 {"event_id":"evt-task-1","event_type":"TaskCompleted","occurred_at":"2026-08-21T23:05:00Z","source":"fulfillment-execution","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1"}}
 EOF
 
@@ -574,10 +632,11 @@ failing-path unit test:
 Full documentation site: **<https://claudioed.github.io/wes-work-planning/>**
 
 It covers the business context and ubiquitous language, the DDD model
-(subdomain classification, every aggregate and invariant, all nine domain
+(subdomain classification, every aggregate and invariant, all ten domain
 events), an API reference generated from `apis/openapi.yaml` plus an Events
-page from `apis/asyncapi.yaml`, the ecosystem context map, and seven
-architecture decision records. Source lives in [`docs/`](./docs) (Docusaurus);
+page from `apis/asyncapi.yaml`, the ecosystem context map, the MCP governance
+charter, the analytics report contract, and eighteen architecture decision
+records. Source lives in [`docs/`](./docs) (Docusaurus);
 it is built and deployed to GitHub Pages by
 [`.github/workflows/docs.yml`](./.github/workflows/docs.yml).
 

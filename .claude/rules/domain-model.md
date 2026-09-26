@@ -37,6 +37,14 @@
   requiredCapabilities.
 - **Known gap**: classification drift after release is not retroactively
   applied — a WorkUnit stamps classification once, at release time.
+- **Travel-distance hint** — `CommitShiftPlan` accepts an OPTIONAL
+  `fromLocationCode`/`toLocationCode` pair; when both are set it reads the
+  distance once from facility-layout's `GET /distance` (via
+  `ports.TravelDistanceLookup`, `TRAVEL_DISTANCE_MODE=http|permissive`,
+  permissive by default, fail-open) and stamps it on the `PathPlan`
+  (`TravelDistanceM`/`TravelDistanceKnown`/estimated flag), surfaced as
+  optional `travelDistanceM`/`travelDistanceEstimated` in the response
+  (ADR-0017). Omitted, never zero-filled, when unknown.
 - **LaborPlanObserved** — a read-only projection of Workforce Management's
   OWN `ShiftPlanCommitted` event, keyed by `path_id`. Deliberately NOT fed
   into this service's own `ShiftPlan`/`PathPlan` aggregate — same term
@@ -68,7 +76,8 @@
 `PathThrottled`, `LaborReassignmentFlagged`, `PathCapacityChanged` (raised by
 `SampleBacklog` only when the caller supplies a CPT `CutoffAt` — see
 ADR-0018; reports this path's remaining admission capacity, correlated by
-CPT cutoff timestamp, for order-management's future `PathCapacity` port).
+CPT cutoff timestamp; consumed by order-management's `kafkapathcapacity`
+adapter behind its `PathCapacity` port).
 
 `OccurredAt` on every event comes from the injected `Clock` port, never
 `time.Now()` inside the domain — event-timing assertions in tests are exact,
@@ -79,8 +88,9 @@ default `EVENT_PUBLISHER=log` writes to the log publisher instead. "Declared
 in the catalogue" is not the same claim as "flowing in your environment
 right now" — check the actual env var.
 
-Only one event is actually **consumed** by another service today:
-`WorkReleased`, by `fulfillment-execution`, which turns it into a `Task`. The
+Two events are actually **consumed** by another service today:
+`WorkReleased`, by `fulfillment-execution`, which turns it into a `Task`, and
+`PathCapacityChanged`, by `order-management` (its path-capacity cache). The
 rest are published for observability/future subscribers.
 
 ## Use cases (application layer)
