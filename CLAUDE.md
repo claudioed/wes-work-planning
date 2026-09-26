@@ -44,13 +44,16 @@ adding a new bounded-context boundary.
 ## Key Commands
 
 ```sh
+# Every run needs the process-path catalogue (ADR-0012) — default
+# PATH_CATALOGUE_SOURCE=file refuses to start without PATH_CATALOGUE_FILE
+export PATH_CATALOGUE_FILE=../warehouse-infra/config/process-paths/sortable-fc.yaml
+
 # Run in-memory (no infra)
 go run ./cmd/wes                       # :8080
 
-# Run against Postgres
-docker compose up -d
-migrate -path migrations -database "$DATABASE_URL" up
-DATABASE_URL="postgres://wes:***@localhost:5432/wes?sslmode=disable" go run ./cmd/wes
+# Run against Postgres (cmd/wes applies migrations/ itself on start)
+docker compose up -d                   # Postgres only; Kafka is the shared cluster broker
+DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cmd/wes
 
 # Analytics data product (separate DB + Kafka fan-out)
 go run ./cmd/wes-projector              # :8091 — the ONLY writer
@@ -98,7 +101,7 @@ relying on the hook firing.
 ## Domain Model
 
 Ubiquitous language, the four aggregates and their enforced invariants, the
-nine domain events, and the seven core use cases are documented in
+ten domain events, and the seven core use cases are documented in
 **`.claude/rules/domain-model.md`** — read it before writing any use case or
 domain logic. Use those exact terms; do not invent synonyms.
 
@@ -108,7 +111,8 @@ domain logic. Use those exact terms; do not invent synonyms.
   telemetry/rebalance/labor-plan-view/inventory-view), the Kafka integration
   event contract (published + consumed topics, envelope, idempotency), and
   the read-only projections built from consumed events (`LaborPlanObserved`,
-  `UsableInventoryObserved`) are documented in
+  `UsableInventoryObserved`), the `KAFKA_CONSUMER_GROUP` override, and the
+  `PATH_CATALOGUE_SOURCE=file|kafka` process-path catalogue are documented in
   **`.claude/rules/integration-events.md`**.
 - Full request/response schemas, every status code, and the shared `Problem`
   error component live in [`apis/openapi.yaml`](./apis/openapi.yaml) — this
@@ -124,7 +128,7 @@ domain logic. Use those exact terms; do not invent synonyms.
 
 ## Architecture Decision Records
 
-16 ADRs under `docs/docs/adr/` cover hexagonal layering (0001), waveless
+18 ADRs under `docs/docs/adr/` cover hexagonal layering (0001), waveless
 release (0002), flow balancing (0003), Kafka integration events (0004),
 RFC 7807 (0005), the Labor Plan View vs. Workforce's own ShiftPlan model
 distinction (0006), Go architecture fitness tests (0007), the MCP inbound
@@ -132,5 +136,7 @@ adapter (0008), product classification propagation (0009), gift-wrap as a
 `WorkReleased` characteristic (0010), the analytics data product (0011),
 process-path catalogue validation (0012), the standard metrics convention
 (0013), the transactional outbox (0014), and the two REST-identity /
-static-bearer-auth ADRs (0015 added it, 0016 records its fleet-wide removal).
+static-bearer-auth ADRs (0015 added it, 0016 records its fleet-wide removal),
+the facility-layout travel-distance lookup on CommitShiftPlan (0017), and the
+`PathCapacityChanged` integration event consumed by order-management (0018).
 Read the relevant ADR before reversing a documented decision.
