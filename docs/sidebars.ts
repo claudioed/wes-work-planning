@@ -102,6 +102,8 @@ const sidebars: SidebarsConfig = {
         'adr/0016-remove-rest-mcp-static-bearer-auth',
         'adr/0017-travel-distance-lookup-on-commit-shift-plan',
         'adr/0018-path-capacity-changed',
+        'adr/0019-labor-plan-committed-shift-plan-reconciliation',
+        'adr/0020-flowfed-path-observed-throughput-signal',
       ],
     },
   ],
