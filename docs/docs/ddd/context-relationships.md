@@ -3,7 +3,7 @@ id: context-relationships
 title: Context relationships
 sidebar_label: Context relationships
 sidebar_position: 5
-description: The strategic context-mapping patterns that govern this bounded context's relationships with the other four services.
+description: The strategic context-mapping patterns that govern this bounded context's relationships with the other services it integrates with.
 ---
 
 # Context relationships
@@ -24,7 +24,10 @@ Open-Host Service (OHS), Published Language (PL), Partnership (P).
 | `workforce-management` | upstream of us | **Customer/Supplier**, with an **ACL on our side** | Supplies committed labour plans as `ShiftPlanCommitted`. Translated at the boundary into a different type. |
 | `fulfillment-execution` | downstream of us | **Customer/Supplier**, we are the supplier; **OHS + Published Language** | We publish `WorkReleased`; Execution builds its own `Task` from it. It does not get access to our `WorkPool`. |
 | `fulfillment-execution` (feedback edge) | upstream of us | **Customer/Supplier**, roles reversed | `TaskCompleted` flows back and closes the loop. Two directed relationships between the same pair, not one bidirectional one. |
-| `facility-layout` | — | **no relationship today**; would be **Conformist to its OHS** | Not wired at all. Its location-code hierarchy is Published Language other contexts would conform to for physical-location truth. |
+| `order-management` | upstream of us | **Customer/Supplier**, with an **ACL on our side** | `OrderAllocated`/`OrderPartiallyAllocated` become one `EnqueueWorkUnit` per line. Fire-and-forget. |
+| `order-management` (capacity edge) | downstream of us | **Customer/Supplier**, we are the supplier; **OHS + Published Language** | We publish `PathCapacityChanged` (ADR-0018); its `kafkapathcapacity` adapter caches remaining capacity per (path, cutoff). |
+| `facility-layout` | upstream of us | **Conformist to its OHS** | `CommitShiftPlan` reads `GET /distance` once at commit time (ADR-0017); permissive by default and fail-open. |
+| `process-path-management` | upstream of us | **Conformist to its OHS/PL** | Owns the process-path catalogue every `pathId` is validated against (ADR-0012); consumed from Kafka with `PATH_CATALOGUE_SOURCE=kafka`, else from the same catalogue as YAML. |
 
 ## WMS → WES: Customer/Supplier, ACL in both directions
 
@@ -86,22 +89,23 @@ Modelling it as two matters: the two edges have different contracts
 payloads, and different failure modes. On the feedback edge we are the customer
 and conform to *their* published `TaskCompleted` shape.
 
-## The relationship that does not exist
+## The Conformist relationships
 
-`facility-layout` is the newest service and has **no live integration with this
-context at all** — no shared topic, no API call, no dependency in either
-direction. It publishes only to an in-process log publisher today.
-
-Strategically it is a **Generic subdomain** providing an Open Host Service for
+`facility-layout` is a **Generic subdomain** providing an Open Host Service for
 physical-location truth (`Site → Zone → Aisle → LocationSlot`, with an
-industry-standard `Site-Area-Zone-Aisle-Bay-Level-Position` code). If this
-context ever needs to reason about *where* a process path physically is — for
-travel-aware release or congestion-aware balancing — it would become a
-**Conformist** to that Published Language rather than modelling geography
-itself. That follows the reference model's own guidance to extract generic
-logic once instead of duplicating it in every context.
+industry-standard `Site-Area-Zone-Aisle-Bay-Level-Position` code). This context
+conforms to it for exactly one fact: the travel distance between two location
+codes, read from `GET /distance` once when a shift plan is committed
+([ADR-0017](../adr/0017-travel-distance-lookup-on-commit-shift-plan.md)).
+Travel time, congestion and route choice remain modelled here; geography is
+not. We do not consume its Kafka topic.
 
-Until then, the honest diagram has no edge there. See the
+`process-path-management` is likewise Generic and owns the process-path
+catalogue. We conform to it rather than keeping our own list of paths
+([ADR-0012](../adr/0012-process-path-catalogue-validation.md)).
+
+Both follow the reference model's guidance to extract generic logic once
+instead of duplicating it in every context. See the
 [context map](../ecosystem/context-map.md).
 
 ## What we are *not*

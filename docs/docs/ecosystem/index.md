@@ -4,28 +4,31 @@ title: Ecosystem
 sidebar_label: Introduction
 sidebar_position: 0
 slug: /ecosystem/
-description: Where this service sits among the six warehouse-systems bounded contexts.
+description: Where this service sits among the warehouse-systems bounded contexts.
 ---
 
 # Ecosystem
 
-`warehouse-systems` is six Go services, each a bounded context with its own
-model, its own database and its own deployment lifecycle. This one is the WES
-tier's core — the conductor.
+`warehouse-systems` is a fleet of Go services, each a bounded context with its
+own model, its own database and its own deployment lifecycle. This one is the
+WES tier's core — the conductor. This section covers the six contexts this
+service integrates with directly; the others (labor-performance,
+warehouse-ops-agent, network-fulfillment) have no direct edge to it beyond
+calling its public API.
 
 | Page | Contents |
 |---|---|
-| [Context map](./context-map.md) | The diagram: what is actually wired today, and what is only strategically related |
+| [Context map](./context-map.md) | The diagram: every Kafka and REST edge wired today |
 | [Integration events](./integration-events.md) | Every topic published and consumed, with real payloads and idempotency behaviour |
-| [Sibling services](./sibling-services.md) | What each of the other five owns |
+| [Sibling services](./sibling-services.md) | What each directly integrated sibling owns |
 
-## The six services
+## The directly integrated services
 
 ```mermaid
 flowchart TB
     subgraph wms["WMS tier — what &amp; where"]
         INV["inventory-storage<br/><i>Core</i>"]
-        OM["order-management<br/><i>Core</i>"]
+        OM["order-management<br/><i>Generic/Supporting</i>"]
     end
     subgraph wes["WES tier — when &amp; in what order"]
         WP["<b>wes-work-planning</b><br/><i>Core — this service</i>"]
@@ -34,17 +37,22 @@ flowchart TB
     subgraph sup["Supporting &amp; Generic"]
         WM["workforce-management<br/><i>Supporting</i>"]
         FL["facility-layout<br/><i>Generic</i>"]
+        PPM["process-path-management<br/><i>Generic</i>"]
     end
 
     INV -->|"StockReserved<br/>ReservationRevoked"| WP
     WM -->|"ShiftPlanCommitted"| WP
     OM -->|"OrderAllocated<br/>OrderPartiallyAllocated"| WP
+    PPM -->|"ProcessPath* catalogue<br/>(PATH_CATALOGUE_SOURCE=kafka)"| WP
     WP -->|"WorkReleased"| FE
+    WP -->|"PathCapacityChanged"| OM
     FE -->|"TaskCompleted"| WP
+    WP -.->|"GET /products/{sku}/classification"| INV
+    WP -.->|"GET /distance"| FL
 
     style WP fill:#2e6da4,color:#ffffff,stroke:#1b4368,stroke-width:3px
-    style FL stroke-dasharray: 5 5
 ```
 
-Five live Kafka edges, all of them touching this service. `facility-layout`
-(dashed) has no live integration with anything yet.
+Solid arrows are Kafka edges, dashed arrows are REST lookups this service
+makes; every one of them touches this service. See the
+[context map](./context-map.md) for the relationship patterns.

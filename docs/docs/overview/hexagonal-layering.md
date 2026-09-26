@@ -20,10 +20,11 @@ flowchart TB
     subgraph inbound["Inbound adapters (driving)"]
         HTTP["adapters/inbound/http<br/>chi router, DTOs, RFC 7807"]
         KIN["adapters/inbound/kafka<br/>integration-event consumer"]
+        MCPIN["adapters/inbound/mcp<br/>MCP tools, resources, prompts"]
     end
 
     subgraph app["Application layer"]
-        UC["application/usecases<br/>7 use cases + 2 projectors"]
+        UC["application/usecases<br/>7 control-loop use cases,<br/>3 queries + 2 projectors"]
         PORTS["application/ports<br/>driven-port interfaces"]
     end
 
@@ -33,24 +34,30 @@ flowchart TB
         RE["release<br/>WorkPool · ReleasePolicy"]
         WU["workunit<br/>WorkUnit"]
         SH["shared<br/>CPT · Rate · PathId · Quantity · StationCount · events"]
-        LV["laborview / inventoryview<br/>read-model values"]
+        LV["laborview / inventoryview /<br/>productclassificationview / traveldistanceview<br/>read-model values"]
+        PC["pathcatalog<br/>process-path catalogue"]
     end
 
     subgraph outbound["Outbound adapters (driven)"]
         PG["adapters/outbound/postgres<br/>pgx/v5 repositories"]
         MEM["adapters/outbound/memory<br/>in-memory repositories"]
         EV["adapters/outbound/events<br/>log publisher"]
-        KOUT["adapters/outbound/kafka<br/>Kafka publisher"]
+        KOUT["adapters/outbound/kafka<br/>Kafka publishers"]
+        CAT["adapters/outbound/filecatalog · kafkacatalog<br/>process-path catalogue"]
+        LOOK["adapters/outbound/productclassification · traveldistance<br/>sibling REST lookups"]
     end
 
     HTTP --> UC
     KIN --> UC
+    MCPIN --> UC
     UC --> PORTS
     UC --> domain
     PORTS -.implemented by.-> PG
     PORTS -.implemented by.-> MEM
     PORTS -.implemented by.-> EV
     PORTS -.implemented by.-> KOUT
+    PORTS -.implemented by.-> CAT
+    PORTS -.implemented by.-> LOOK
     PG --> domain
     MEM --> domain
 ```
@@ -58,7 +65,10 @@ flowchart TB
 ## Package map
 
 ```
-cmd/wes/                        main.go — the only place every layer meets
+cmd/wes/                        OLTP composition root — the only place every layer meets
+cmd/wes-projector/              analytics writer (ADR-0011)
+cmd/wes-reports/                analytics read-only reports API (ADR-0011)
+cmd/mcp/                        MCP server (ADR-0008)
 internal/
   domain/                       pure Go: aggregates, value objects, events, errors
     charge/                     ChargeForecast aggregate
@@ -68,19 +78,30 @@ internal/
     shared/                     CPT, Rate, PathId, Quantity, StationCount, DomainEvent
     laborview/                  LaborPlanObserved read-model value
     inventoryview/              UsableInventoryObserved read-model value
+    pathcatalog/                process-path catalogue + prefix lookup (ADR-0012)
+    productclassificationview/  SKU classification read-model value (ADR-0009)
+    traveldistanceview/         travel-distance read-model value (ADR-0017)
+  analytics/report/             analytics report model (ADR-0011)
   application/
     ports/                      driven-port interfaces (repos, publisher, clock)
     usecases/                   one struct per use case
   adapters/
     inbound/http/               chi router, DTOs, domain-error → HTTP mapping
-    inbound/kafka/              integration-event consumer (3 topics)
-    outbound/postgres/          pgxpool repository implementations
+    inbound/kafka/              integration-event consumer (4 topics) + analytics consumer
+    inbound/mcp/                MCP tools, resources, prompts (ADR-0008)
+    outbound/postgres/          pgxpool repositories, UnitOfWork, outbox + relay (ADR-0014)
     outbound/memory/            thread-safe in-memory repositories
-    outbound/events/            log/buffered EventPublisher
-    outbound/kafka/             Kafka EventPublisher
+    outbound/events/            log EventPublisher + MultiPublisher
+    outbound/kafka/             integration + analytics publishers, outbox encoders, RelaySink
+    outbound/filecatalog/       process-path catalogue from YAML (PATH_CATALOGUE_SOURCE=file)
+    outbound/kafkacatalog/      process-path catalogue from Kafka (PATH_CATALOGUE_SOURCE=kafka)
+    outbound/productclassification/  inventory-storage REST lookup
+    outbound/traveldistance/    facility-layout REST lookup
+    outbound/analyticsstore/    analytics Postgres store
+    outbound/telemetry/         OpenTelemetry setup
     kafka/envelope/             the wire envelope shared by both Kafka adapters
   architecture/                 arch-go fitness tests
-migrations/                     golang-migrate SQL files
+migrations/                     golang-migrate SQL files (analytics/ for the projector)
 apis/                           openapi.yaml + asyncapi.yaml (the published contracts)
 features/                       godog (Gherkin) acceptance specs
 ```
@@ -101,9 +122,15 @@ so the domain never learns that Postgres or Kafka exist:
 | `LaborPlanViewRepo` | persist the `LaborPlanObserved` projection, one per path |
 | `InventoryViewRepo` | atomically apply a delta to `UsableInventoryObserved`, keyed by SKU |
 | `ProcessedEventRepo` | record consumed `event_id`s so redelivery is a no-op |
+| `UnitOfWork` | run a use case's save + publish in one Postgres transaction (ADR-0014) |
+| `PathCatalogue` | look up a `pathId` in the declared process-path catalogue (ADR-0012) |
+| `ProductClassificationLookup` | read a SKU's classification from inventory-storage (ADR-0009) |
+| `TravelDistanceLookup` | read a travel distance from facility-layout (ADR-0017) |
 
-Each of the first six has both an in-memory and a Postgres/Kafka
-implementation; the composition root picks one per environment variable.
+The composition root picks each implementation from environment variables:
+in-memory vs Postgres (`DATABASE_URL`), log vs Kafka (`EVENT_PUBLISHER`),
+file vs Kafka catalogue (`PATH_CATALOGUE_SOURCE`), permissive vs HTTP lookups
+(`*_MODE`).
 
 ## Why this shape
 

@@ -3,7 +3,7 @@ id: domain-events
 title: Domain events
 sidebar_label: Domain events
 sidebar_position: 3
-description: The nine past-tense domain events raised by this bounded context, what raises each, and which reach Kafka.
+description: The ten past-tense domain events declared by this bounded context, what raises each, and which reach Kafka.
 ---
 
 # Domain events
@@ -35,7 +35,7 @@ exact rather than approximate.
 | `RateDeviationDetected` | *(declared; not yet raised by a use case)* | `PathId` | ⚠️ declared only |
 | `PathThrottled` | `RebalanceDecision` (flow-fed over threshold) | `PathId` | ✅ |
 | `LaborReassignmentFlagged` | `RebalanceDecision` (release-fed saturated) | `PathId` | ✅ |
-| `PathCapacityChanged` | `SampleBacklog` (only when the caller supplies `CutoffAt`) | `PathId`, `CutoffAt`, `RemainingUnits`, `Known` | ✅ |
+| `PathCapacityChanged` | `SampleBacklog` (only when the caller supplies `CutoffAt`) | `PathId`, `CutoffAt`, `RemainingUnits`, `Known` | ✅ **consumed downstream** |
 
 :::caution Stated honestly
 `RateDeviationDetected` is declared in the domain event catalogue and appears
@@ -53,9 +53,11 @@ outbound Kafka adapter has a payload mapping for it and a use case hands it to
 
 ## Which events are actually *consumed* by another service
 
-Exactly one: **`WorkReleased`**, by `fulfillment-execution`, which turns a
-released work unit into a `Task`. The rest are published for observability and
-for future subscribers; nothing in the platform reads them today. Saying so is
+Exactly two: **`WorkReleased`**, by `fulfillment-execution`, which turns a
+released work unit into a `Task`, and **`PathCapacityChanged`**, by
+`order-management`, which caches each path's remaining capacity per CPT
+cutoff. The rest are published for observability and for future subscribers;
+nothing in the platform reads them today. Saying so is
 more useful than implying a richer event mesh than exists.
 
 ## Event flow through a shift
@@ -118,11 +120,12 @@ downstream consumers want.
 `PathCapacityChanged` (ADR-0018) is the other event that carries more than a
 bare `PathId`: it is a *report*, not just a fact-of-occurrence, so it needs
 `CutoffAt`/`RemainingUnits`/`Known` to be useful to a downstream consumer
-(order-management's future `PathCapacity` adapter) at all.
+(order-management's `kafkapathcapacity` adapter, behind its `PathCapacity`
+port) at all.
 
 ## Wire format
 
 Domain events become integration events in
 `internal/adapters/outbound/kafka/publisher.go`, wrapped in the envelope shared
-by all five services. The exact shapes are on the
+by every `warehouse-systems` service. The exact shapes are on the
 [Events](../api/events.md) page.

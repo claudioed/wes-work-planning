@@ -18,7 +18,7 @@ own model — no aspirational modelling.
 |---|---|
 | [Subdomain classification](./subdomain-classification.md) | Core / Supporting / Generic, with the justification |
 | [Aggregates and invariants](./aggregates-and-invariants.md) | All four aggregates, every invariant, every failing path |
-| [Domain events](./domain-events.md) | The nine past-tense events and who raises them |
+| [Domain events](./domain-events.md) | The ten past-tense events and who raises them |
 | [Read models](./read-models.md) | Projections — and why they are never aggregate state |
 | [Context relationships](./context-relationships.md) | Customer/Supplier, ACL, OHS, Conformist — the strategic patterns |
 
