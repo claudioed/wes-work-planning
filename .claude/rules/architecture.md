@@ -19,6 +19,7 @@ internal/
     inventoryview/           read-only UsableInventoryObserved projection, keyed by SKU
     pathcatalog/             process-path catalogue value type (ADR-0012)
     productclassificationview/  cached SKU -> ProductClassification lookups (ADR-0009)
+    traveldistanceview/      TravelDistance read-model value from facility-layout (ADR-0017)
 
   application/
     ports/                   driven-port interfaces (repositories, event publisher, clock, lookups)
@@ -33,9 +34,11 @@ internal/
     outbound/memory/         in-memory repo impls for tests/local
     outbound/events/         log-based publisher + MultiPublisher (fan-out when no Postgres)
     outbound/kafka/          integration + analytics Kafka publishers, outbox Encoders, RelaySink
-    outbound/kafkacatalog/   Kafka-sourced path-catalogue adapter variant
-    outbound/filecatalog/    file-sourced path-catalogue adapter (PATH_CATALOGUE_FILE)
+    outbound/kafkacatalog/   Kafka-sourced path-catalogue adapter (PATH_CATALOGUE_SOURCE=kafka;
+                              replays warehouse.process-path-management.events, own consumer group)
+    outbound/filecatalog/    file-sourced path-catalogue adapter (default; PATH_CATALOGUE_FILE)
     outbound/productclassification/  synchronous HTTP client to inventory-storage
+    outbound/traveldistance/ synchronous HTTP client to facility-layout GET /distance (ADR-0017)
     outbound/analyticsstore/ analytics Postgres reader/writer
     outbound/telemetry/      OpenTelemetry wiring / metrics adapters
 

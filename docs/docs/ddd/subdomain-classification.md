@@ -45,7 +45,7 @@ Which is, to the letter, what this service does: it consumes the labour plan
 (`StockReserved`/`ReservationRevoked` from Inventory), and turns them into
 released work (`WorkReleased` to Execution).
 
-## Where this sits among the five services
+## Where this sits among the directly integrated services
 
 | Service | Tier | Subdomain | Why |
 |---|---|---|---|
@@ -54,6 +54,8 @@ released work (`WorkReleased` to Execution).
 | `workforce-management` | — | **Supporting** | Allocating workforce to workload is necessary and industry-common, not a differentiator. Deliberately stops at the path boundary. |
 | `fulfillment-execution` | WES/WCS-adjacent | **Core** | Pick/Pack/SLAM task lifecycle with pull-based `claimNext` and lease semantics — directly drives throughput and accuracy at scale. |
 | `facility-layout` | — | **Generic** | The physical warehouse map. Same bucket as Cartonization and WCS in the reference model: extract it once rather than duplicating it in every context. |
+| `order-management` | WMS | **Generic/Supporting** | Order intake, per-line allocation, promise dates and choreographed release — needed, but not this platform's differentiator. |
+| `process-path-management` | — | **Generic** | The declared process-path catalogue, extracted once for every context that validates a `pathId`. |
 
 ## What "Core" obliges
 

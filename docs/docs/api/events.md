@@ -18,7 +18,7 @@ This page is written from that spec.
 | | |
 |---|---|
 | **Topic** | `warehouse.work-planning.events` |
-| **Protocol** | Kafka (`localhost:9092` locally; the broker is shared by all five services) |
+| **Protocol** | Kafka (`localhost:9092` locally; one broker shared by every `warehouse-systems` service) |
 | **Message key** | the event id |
 | **Default content type** | `application/cloudevents+json` |
 | **Delivery** | at-least-once — **consumers must deduplicate** |
@@ -128,8 +128,9 @@ Topic `warehouse.work-planning.events`. Ten event types are catalogued; the
 | `LaborReassignmentFlagged` | `path_id` | flow balancing recommends moving headcount |
 | `PathCapacityChanged` | `path_id`, `cutoff_at`, `remaining_units`, `known` | `SampleBacklog` is called with a `cutoffAt` query parameter (ADR-0018) |
 
-**`WorkReleased` is the only one any other service consumes today** —
-`fulfillment-execution` turns it into a `Task`. Its payload is enriched at the
+**`WorkReleased` and `PathCapacityChanged` are the only ones any other
+service consumes today** — `fulfillment-execution` turns `WorkReleased` into a
+`Task`; `order-management` consumes `PathCapacityChanged` (below). Its payload is enriched at the
 adapter with `cpt` and `ref` (read from the `WorkUnit` repository) so the
 downstream consumer never has to call back; the domain event itself carries
 only the two identifiers.
@@ -265,9 +266,10 @@ this topic, correlated against the given CPT cutoff timestamp:
 `known` is `false` (and `remaining_units` is always `0`) for a `FlowFed`
 path — it has no hard admission ceiling, only a backlog alarm threshold,
 which is not a capacity figure — or for a `ReleaseFed` path with no WIP
-limit provisioned. This is `order-management`'s named future real source
-for its `ports.PathCapacity` port (currently the `UnknownPathCapacity`
-placeholder, always `known=false`); see
+limit provisioned. `order-management` consumes it through its
+`kafkapathcapacity` adapter, which backs its `ports.PathCapacity` port when
+order-management runs with `PATH_CATALOGUE_SOURCE=kafka` (as deployed; without
+it, that port falls back to the `UnknownPathCapacity` placeholder); see
 [ADR-0018](../adr/0018-path-capacity-changed.md) for the full design,
 including why correlation runs by `cutoff_at` timestamp rather than
 process-path-management's `cptId` string.

@@ -3,13 +3,13 @@ id: sibling-services
 title: Sibling services
 sidebar_label: Sibling services
 sidebar_position: 3
-description: What each of the other four warehouse-systems bounded contexts owns, and how it relates to this one.
+description: What each warehouse-systems bounded context this service integrates with owns, and how it relates to this one.
 ---
 
 # Sibling services
 
-The other four bounded contexts, summarised from each repository's own
-`CLAUDE.md`. Each is an independent Go service with its own model, its own
+The six bounded contexts this service integrates with directly, summarised
+from each repository's own `CLAUDE.md` and adapter code. Each is an independent Go service with its own model, its own
 database and its own deployment lifecycle.
 
 ---
@@ -99,12 +99,12 @@ contexts, which is what makes the handoff coherent without a shared type.
 
 ---
 
-## `order-management` — **Core**
+## `order-management` — **Generic/Supporting**
 
-> Allocates stock against orders and marks order lines Released, ready for
-> warehouse execution.
+> Order intake, per-line stock allocation, promise-date calculation, and
+> choreographed release.
 
-The newest bounded context in the platform. It used to call this service's
+It used to call this service's
 `POST /paths/{pathId}/work-units` synchronously to release work — a coupling
 this service's owners rejected once order-management existed as its own
 context, in favor of the same event-choreography pattern already used by
@@ -113,6 +113,7 @@ context, in favor of the same event-choreography pattern already used by
 | | |
 |---|---|
 | Publishes | `OrderAllocated`, `OrderPartiallyAllocated` on `warehouse.order-management.events` |
+| Consumes | our `PathCapacityChanged` on `warehouse.work-planning.events` (its `kafkapathcapacity` adapter) |
 
 **Relationship to this service:** upstream Customer/Supplier, behind our ACL,
 same as `inventory-storage` and `workforce-management`. We consume both event
@@ -122,6 +123,10 @@ a deterministic `work_unit_id` derived as `"{order_id}-line-{line_no}"`. This
 edge is deliberately **fire-and-forget**: no reply event is published back to
 order-management. See
 [Integration events](../ecosystem/integration-events.md#warehouseorder-managementevents--orderallocated-orderpartiallyallocated).
+
+In the other direction, order-management consumes our `PathCapacityChanged`
+to learn each path's remaining admission capacity per CPT cutoff
+([ADR-0018](../adr/0018-path-capacity-changed.md)); there we are the supplier.
 
 ---
 
@@ -139,21 +144,39 @@ explicitly does **not** own occupancy or stock; that stays in
 |---|---|
 | Model | `Site → Zone → Aisle → LocationSlot`, plus `PlacementRules` |
 | Location code | industry-standard `Site-Area-Zone-Aisle-Bay-Level-Position` |
-| Read endpoints | `GET /sites/{siteCode}/layout`, `GET /zones/{zoneId}/grid` |
-| Publishes | **nothing to Kafka today** — in-process log publisher only |
+| Read endpoints | `GET /sites/{siteCode}/layout`, `GET /distance`, among others |
+| Publishes | `warehouse.facility.events` (not consumed by this service) |
 
-**Relationship to this service: none today.** No topic, no API call, no
-dependency in either direction. Classified Generic for the same reason the
+**Relationship to this service: Conformist, read-only.** `CommitShiftPlan`
+calls `GET /distance` once, at commit time, for two caller-supplied location
+codes and stamps the result on the `PathPlan`
+([ADR-0017](../adr/0017-travel-distance-lookup-on-commit-shift-plan.md)). The
+lookup is off by default (`TRAVEL_DISTANCE_MODE=permissive`) and fails open.
+We do not consume its topic. Classified Generic for the same reason the
 reference model puts Cartonization there: extract it once rather than
 duplicating geography in every context.
 
-If release ever becomes travel-aware, or flow balancing congestion-aware, this
-context would become a **Conformist** to facility-layout's location-code
-Published Language rather than modelling physical structure itself.
+---
+
+## `process-path-management` — **Generic**
+
+> Owns the declared process-path catalogue — which paths exist, their
+> prefixes and whether they are active.
+
+| | |
+|---|---|
+| Publishes | `ProcessPathCreated`, `ProcessPathUpdated`, `ProcessPathDeactivated` on `warehouse.process-path-management.events` |
+
+**Relationship to this service: Conformist.** Every `pathId` this service
+accepts is validated against that catalogue
+([ADR-0012](../adr/0012-process-path-catalogue-validation.md)). With
+`PATH_CATALOGUE_SOURCE=kafka` we replay its topic into an in-memory catalogue
+at boot and follow it live; with the default `file` source we read the same
+catalogue from `warehouse-infra`'s YAML.
 
 ---
 
-## What all six share
+## What they all share
 
 Conventions, not code. Each service re-implements these; none of them is a
 shared library, so no service can force another to redeploy:
@@ -165,6 +188,6 @@ shared library, so no service can force another to redeploy:
 - RFC 7807 problem details, an `apis/openapi.yaml` linted by Spectral in CI,
   and a Helm chart
 
-That last point is the real payoff of six bounded contexts that agree on
+That last point is the real payoff of bounded contexts that agree on
 conventions while sharing no types: the *shape* is familiar everywhere, and the
 *models* stay independent.

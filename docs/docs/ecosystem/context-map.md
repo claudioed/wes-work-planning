@@ -3,7 +3,7 @@ id: context-map
 title: Context map
 sidebar_label: Context map
 sidebar_position: 1
-description: The real context map — what is wired via Kafka today, and what is only a strategic relationship.
+description: The real context map — what is wired via Kafka and REST today, and what is only a strategic relationship.
 ---
 
 # Context map
@@ -14,34 +14,45 @@ context map that blurs them is a wish list.
 
 ## What is actually wired today
 
-Every edge below is a real Kafka topic with a real producer and a real
-consumer, verified against each service's own `CLAUDE.md` and adapter code.
+Every edge below is a real Kafka topic or REST call with a real producer and
+a real consumer, verified against this service's `cmd/wes/main.go` and adapter
+code and against each sibling's own adapter code on `develop`. Solid edges are
+Kafka; dashed edges are synchronous REST reads this service makes.
 
 ```mermaid
 flowchart LR
     WM["<b>workforce-management</b><br/>Supporting subdomain<br/>headcount planning per path"]
     INV["<b>inventory-storage</b><br/>WMS tier · Core subdomain<br/>stock ledger, bin-accurate location,<br/>revocable reservations"]
-    OM["<b>order-management</b><br/>Core subdomain<br/>order allocation → release"]
+    OM["<b>order-management</b><br/>order intake, allocation → release"]
+    PPM["<b>process-path-management</b><br/>Generic subdomain<br/>process-path catalogue"]
     WP["<b>wes-work-planning</b><br/>WES tier · Core subdomain<br/><i>the conductor</i><br/>charge → plan → release → balance"]
     FE["<b>fulfillment-execution</b><br/>Core subdomain<br/>Pick / Pack / SLAM task lifecycle<br/>pull-based claimNext + leases"]
-    FL["<b>facility-layout</b><br/>Generic subdomain<br/>Site → Zone → Aisle → LocationSlot<br/><i>no live integration yet</i>"]
+    FL["<b>facility-layout</b><br/>Generic subdomain<br/>Site → Zone → Aisle → LocationSlot<br/>travel graph"]
 
     WM -- "warehouse.workforce.events<br/><b>ShiftPlanCommitted</b><br/>→ LaborPlanObserved (by path_id)" --> WP
     INV -- "warehouse.inventory.events<br/><b>StockReserved</b> / <b>ReservationRevoked</b><br/>→ UsableInventoryObserved (by sku)" --> WP
     OM -- "warehouse.order-management.events<br/><b>OrderAllocated</b> / <b>OrderPartiallyAllocated</b><br/>→ EnqueueWorkUnit per line (fire-and-forget)" --> WP
+    PPM -- "warehouse.process-path-management.events<br/><b>ProcessPathCreated / Updated / Deactivated</b><br/>→ in-memory catalogue (PATH_CATALOGUE_SOURCE=kafka)" --> WP
     WP -- "warehouse.work-planning.events<br/><b>WorkReleased</b><br/>→ becomes a Task" --> FE
+    WP -- "warehouse.work-planning.events<br/><b>PathCapacityChanged</b><br/>→ PathCapacity cache (path, cutoff)" --> OM
     FE -- "warehouse.fulfillment.events<br/><b>TaskCompleted</b><br/>→ RecordCompletion" --> WP
 
-    FL -.->|"no edge — nothing wired"| WP
+    WP -. "GET /products/{sku}/classification<br/>at release (ADR-0009)" .-> INV
+    WP -. "GET /distance<br/>at shift-plan commit (ADR-0017)" .-> FL
 
     style WP fill:#2e6da4,color:#ffffff,stroke:#1b4368,stroke-width:3px
-    style FL stroke-dasharray: 6 4,color:#777777
 ```
 
-That is the complete set. There are **five live edges**, and every one of them
-touches this service — which is what "conductor" means concretely: this is the
-only context in the platform that both consumes from three upstream contexts and
-participates in a closed loop with a fourth.
+That is the complete set: **seven Kafka edges and two REST lookups**, and
+every one of them touches this service — which is what "conductor" means
+concretely. Both REST lookups are permissive by default
+(`PRODUCT_CLASSIFICATION_MODE` / `TRAVEL_DISTANCE_MODE`) and fail open: a
+lookup failure omits an optional hint and never blocks the use case.
+
+Callers of this service's own API are not drawn: `warehouse-ops-agent` reads
+the REST API (for example `GET /work-units?reference=`, the reports API) and
+the MCP server, and the `warehouse-console` shell mounts this repo's `web/`
+micro-frontend.
 
 ### The loop
 
@@ -81,13 +92,16 @@ flowchart TB
     WP["wes-work-planning<br/><b>ACL inbound</b> · <b>OHS outbound</b>"]
     FE["fulfillment-execution"]
     FL["facility-layout<br/><b>OHS</b> for physical-location truth"]
+    PPM["process-path-management<br/><b>OHS + Published Language</b>"]
 
     INV -- "Customer/Supplier<br/>we conform, behind our ACL" --> WP
     WM -- "Customer/Supplier<br/>we conform, behind our ACL" --> WP
     OM -- "Customer/Supplier<br/>we conform, behind our ACL" --> WP
     WP -- "Customer/Supplier<br/>we are the supplier (OHS/PL)" --> FE
+    WP -- "Customer/Supplier<br/>we are the supplier (PathCapacityChanged)" --> OM
     FE -- "Customer/Supplier<br/>roles reversed on the feedback edge" --> WP
-    FL -. "Conformist — <b>if</b> we ever need<br/>physical location; not today" .-> WP
+    FL -- "Conformist<br/>travel distances, read-only" --> WP
+    PPM -- "Conformist<br/>process-path catalogue" --> WP
 
     style WP fill:#2e6da4,color:#ffffff,stroke:#1b4368,stroke-width:3px
 ```
@@ -126,17 +140,29 @@ Service and `WorkReleased` is *our* Published Language. Execution conforms to
 it and builds its own `Task` — a different model with a different lifecycle
 (leases, claims, stations), which is the correct outcome and not an accident.
 
-### The relationship with `facility-layout` is honest about being empty
+### WES → order-management: remaining path capacity
 
-`facility-layout` is the newest service. It has **no Kafka topic, no API call
-and no dependency** in either direction with this context; it publishes only to
-an in-process log publisher. The dashed edge above marks a *potential*
-Conformist relationship — if release ever becomes travel-aware or balancing
-ever becomes congestion-aware, this context would conform to facility-layout's
-location-code Published Language rather than model geography itself.
+`PathCapacityChanged` on `warehouse.work-planning.events` reports a path's
+remaining admission capacity for a given CPT cutoff. order-management's
+`kafkapathcapacity` adapter consumes it (its own per-process consumer group,
+filtering for that one event type) and keys its cache by path and cutoff
+instant. See [ADR-0018](../adr/0018-path-capacity-changed.md).
 
-Drawing that edge as if it existed would be the most tempting and least useful
-thing this page could do.
+### `facility-layout` and `process-path-management`: Conformist, read-only
+
+This context conforms to two Generic contexts without owning or reshaping
+their facts:
+
+- **facility-layout** — `CommitShiftPlan` reads the travel distance between
+  two caller-supplied location codes from `GET /distance` once, at commit
+  time, and stamps it onto the `PathPlan`
+  ([ADR-0017](../adr/0017-travel-distance-lookup-on-commit-shift-plan.md)).
+  Travel time, congestion and route choice stay here; distances stay there.
+- **process-path-management** — owns the process-path catalogue. With
+  `PATH_CATALOGUE_SOURCE=kafka` this service replays its topic into an
+  in-memory catalogue at boot and follows it live; with the default `file`
+  source it reads the same catalogue from a YAML file
+  ([ADR-0012](../adr/0012-process-path-catalogue-validation.md)).
 
 ## Three-tier view
 

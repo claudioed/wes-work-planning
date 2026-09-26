@@ -15,7 +15,8 @@ Not every domain event this service raises belongs on the wire. Check
 `envelope.TopicWorkPlanningEvents` (`internal/adapters/kafka/envelope/envelope.go`)
 — this repo publishes to `warehouse.work-planning.events`, and only events
 a sibling context genuinely needs (e.g. `WorkReleased`, consumed downstream
-by fulfillment-execution) belong there. Before adding a new event to the
+by fulfillment-execution, or `PathCapacityChanged`, consumed by
+order-management) belong there. Before adding a new event to the
 Kafka publisher, confirm who's actually downstream — check
 `docs/docs/adr/0004-kafka-integration-events.md` and
 `apis/asyncapi.yaml` for the existing contract and its consumers.

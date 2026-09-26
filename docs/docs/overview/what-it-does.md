@@ -3,13 +3,16 @@ id: what-it-does
 title: What this service does
 sidebar_label: What it does
 sidebar_position: 1
-description: The seven use cases of the Work Planning & Release bounded context, and the loop they form.
+description: The seven control-loop use cases of the Work Planning & Release bounded context, and the loop they form.
 ---
 
 # What this service does
 
-The bounded context exposes exactly **seven use cases**. They form a single
-closed control loop: plan → release → observe → correct.
+The bounded context is built around **seven control-loop use cases**. They
+form a single closed control loop: plan → release → observe → correct.
+Alongside them sit read-only queries (`GetWorkUnitsByReference`,
+`LaborPlanView`, `InventoryView`) and the two projectors that consume other
+contexts' events (`ObserveLaborPlan`, `ObserveInventoryChange`).
 
 ```mermaid
 flowchart LR
@@ -67,7 +70,8 @@ This is the waveless heart of the service: there is no wave, no batch window,
 no schedule. Admission is a **policy applied continuously on demand**. See
 [ADR-0002](../adr/0002-waveless-continuous-release.md).
 
-Emits `WorkReleased`, which is the one event published onto Kafka today.
+Emits `WorkReleased`, the event `fulfillment-execution` consumes to create a
+`Task`.
 
 ### 5. `RecordCompletion(workUnitId)`
 
@@ -84,6 +88,11 @@ different inbound adapter.
 Returns the live telemetry **read model**: backlog depth (pending entries),
 WIP (released-but-not-complete entries), feed mode, and whether the pool is
 over its alarm threshold. Raises `BacklogThresholdBreached` when it is.
+
+When the caller also supplies a CPT `cutoffAt`, it reports the pool's
+remaining admission capacity and raises `PathCapacityChanged` for that
+(path, cutoff) pair — the event order-management consumes
+([ADR-0018](../adr/0018-path-capacity-changed.md)).
 
 This is a **projection computed from pool state**, not a field stored on an
 aggregate — see [Read models](../ddd/read-models.md).

@@ -8,9 +8,10 @@ description: Every Kafka topic this service publishes to and consumes from, with
 
 # Integration events
 
-All five services share **one Kafka broker** (`localhost:9092` locally, via
-`~/warehouse-systems/docker-compose.kafka.yml`). This service does not run its
-own — it connects to the shared one.
+Every `warehouse-systems` service shares **one Kafka broker** — the
+in-cluster Kafka release in the `warehouse` kind cluster, reachable from the
+host at `localhost:9092`. This service does not run its own; its
+`docker-compose.yml` runs Postgres only.
 
 Client library: `github.com/segmentio/kafka-go` (pure Go, no cgo).
 
@@ -51,7 +52,7 @@ page; code against the shape above if you are writing a consumer today.
 | `event_type` | `data` | Published when | Consumed by |
 |---|---|---|---|
 | `WorkReleased` | `{"path_id","work_unit_id","cpt","ref"}` | `ReleaseNextWork` releases a unit | **`fulfillment-execution`** → creates a `Task` |
-| `PathCapacityChanged` | `{"path_id","cutoff_at","remaining_units","known"}` | `SampleBacklog` is called with `cutoffAt` set (ADR-0018) | Not consumed yet — order-management's named future real source for its `ports.PathCapacity` port |
+| `PathCapacityChanged` | `{"path_id","cutoff_at","remaining_units","known"}` | `SampleBacklog` is called with `cutoffAt` set (ADR-0018) | **`order-management`** — its `kafkapathcapacity` adapter (own per-process consumer group, filters for this one event type) feeds its `ports.PathCapacity` cache, keyed by path and cutoff instant |
 
 ```json
 {
@@ -76,9 +77,11 @@ correlated against a CPT cutoff timestamp — not process-path-management's
 for a `FlowFed` path (no hard admission ceiling) or a `ReleaseFed` path with
 no WIP limit provisioned. See [ADR-0018](../adr/0018-path-capacity-changed.md).
 
-The other seven domain events are also written to this topic by the outbound
+The other eight domain events are also written to this topic by the outbound
 adapter with a `{"path_id": ...}`-shaped payload, but nothing consumes them
-today. See the [full catalogue](../api/events.md#events-published).
+today. (Separately, whenever `EVENT_PUBLISHER=kafka` a second publisher also writes
+every domain event, in a richer envelope, to `warehouse.wes.analytics` for the
+analytics data product — see [ADR-0011](../adr/0011-analytical-data-product.md).) See the [full catalogue](../api/events.md#events-published).
 
 Set `EVENT_PUBLISHER=kafka` (with `KAFKA_BROKERS`) to publish here; the default
 `log` publisher writes the same events to the log instead. Both implement the
@@ -88,7 +91,16 @@ wired.
 ## Consumed
 
 Setting `KAFKA_BROKERS` starts the consumer automatically, **independent of
-`EVENT_PUBLISHER`**. It reads four topics concurrently, one goroutine each.
+`EVENT_PUBLISHER`**. It reads four topics concurrently, one goroutine each,
+under the consumer group `KAFKA_CONSUMER_GROUP` (default `wes-work-planning`,
+shared by every deployed replica). A second process against the shared broker
+— a developer's `go run`, the e2e harness — must set a unique value, or the
+rebalance hands the single partition to one member and the other consumes
+nothing while reporting healthy.
+
+With `PATH_CATALOGUE_SOURCE=kafka` a fifth, separate consumer replays
+process-path-management's topic — see
+[below](#warehouseprocess-path-managementevents--the-process-path-catalogue).
 
 ### `warehouse.workforce.events` — `ShiftPlanCommitted`
 
@@ -180,6 +192,20 @@ observable signal of downstream progress — the same signal every other
 This was a confirmed v1 design choice made when rejecting order-management's
 former synchronous HTTP coupling, not an oversight.
 
+### `warehouse.process-path-management.events` — the process-path catalogue
+
+Consumed only when `PATH_CATALOGUE_SOURCE=kafka` (the default `file` source
+reads the same catalogue from YAML instead). The
+`internal/adapters/outbound/kafkacatalog` consumer replays the topic from the
+beginning under its own per-process consumer group — not
+`KAFKA_CONSUMER_GROUP` — folding `ProcessPathCreated`, `ProcessPathUpdated`
+and `ProcessPathDeactivated` into the in-memory `pathcatalog.Catalogue` that
+validates every `pathId`
+([ADR-0012](../adr/0012-process-path-catalogue-validation.md)). Startup blocks
+until the replay has caught up, then the consumer keeps following the topic
+live. It is a state-rebuild, not an effect, so it does not use
+`processed_events`.
+
 ## Idempotency
 
 Kafka is at-least-once, so redelivery is normal, not exceptional. Every
@@ -223,17 +249,21 @@ sometimes meaningless is an error nobody reads. Deduplicating first keeps
 | Env var | Default | Effect |
 |---|---|---|
 | `KAFKA_BROKERS` | *(unset)* | Comma-separated brokers. **Setting it starts the inbound consumer.** |
+| `KAFKA_CONSUMER_GROUP` | `wes-work-planning` | Consumer group of the integration-event consumer; set a unique value for any second process on the shared broker. |
 | `EVENT_PUBLISHER` | `log` | `kafka` switches the outbound publisher; requires `KAFKA_BROKERS`. |
+| `PATH_CATALOGUE_SOURCE` | `file` | `kafka` replays `warehouse.process-path-management.events` into the catalogue; requires `KAFKA_BROKERS`. |
 
 ## Verifying it end to end
 
 There is a build-tagged integration test (`//go:build integration`) that
-publishes real `ShiftPlanCommitted`- and `StockReserved`-shaped messages to the
-broker and asserts the read models update. It is skipped when `KAFKA_BROKERS`
-is unset, so the default `go test ./...` never needs a broker:
+publishes real `ShiftPlanCommitted`- and `StockReserved`-shaped messages and
+asserts the read models update, plus one for the Kafka-backed process-path
+catalogue. Both start their own Kafka broker with testcontainers, so they need
+Docker but no environment variables; the default `go test ./...` never needs a
+broker:
 
 ```sh
-KAFKA_BROKERS=localhost:9092 go test -tags=integration ./...
+go test -tags=integration ./internal/adapters/inbound/kafka/... ./internal/adapters/outbound/kafkacatalog/...
 ```
 
 For a manual smoke test, see [Running locally](../overview/running-locally.md#connecting-to-the-shared-kafka-broker).

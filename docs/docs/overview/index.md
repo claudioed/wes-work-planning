@@ -44,19 +44,29 @@ it decides *when* work enters the floor and *in what order*.
 | [Business Context](../business-context/index.md) | Domain vision, ubiquitous language, the reasoning behind waveless release and Drum-Buffer-Rope flow balancing |
 | [Domain-Driven Design](../ddd/index.md) | Subdomain classification, every aggregate and its invariants, every domain event, read models, context relationships |
 | [API Reference](../api/index.md) | The REST API generated from the real `apis/openapi.yaml`, the event contract from `apis/asyncapi.yaml`, and the RFC 7807 error model |
-| [Ecosystem](../ecosystem/index.md) | The context map, Kafka topics actually wired today, and the four sibling services |
-| [ADRs](../adr/index.md) | Seven architecture decision records reconstructed from this repo's real history |
+| [Ecosystem](../ecosystem/index.md) | The context map, Kafka topics and REST lookups actually wired today, and the sibling services |
+| [AI Ecosystem (MCP)](../mcp/governance-charter.md) | The MCP governance charter this service's `cmd/mcp` server follows |
+| [Analytics (Data Product)](../analytics/release-throughput-report.md) | The Release Throughput & Backlog Health report contract |
+| [ADRs](../adr/index.md) | Eighteen architecture decision records |
 
 ## At a glance
 
 - **Language / runtime**: Go 1.26, module `github.com/claudioed/wes-work-planning`
 - **Architecture**: hexagonal (ports & adapters), enforced by executable
   fitness tests ([ADR-0007](../adr/0007-arch-go-fitness-tests.md))
-- **Inbound adapters**: REST (chi) and Kafka consumer
-- **Outbound adapters**: Postgres (pgx/v5), in-memory, log event publisher,
-  Kafka event publisher
+- **Binaries**: `cmd/wes` (OLTP REST + Kafka), `cmd/wes-projector` and
+  `cmd/wes-reports` (analytics data product), `cmd/mcp` (MCP server)
+- **Inbound adapters**: REST (chi), Kafka consumer, MCP (Streamable HTTP)
+- **Outbound adapters**: Postgres (pgx/v5, transactional outbox), in-memory,
+  log and Kafka event publishers, process-path catalogue (file or Kafka),
+  inventory-storage classification lookup, facility-layout travel-distance
+  lookup
 - **Aggregates**: `ChargeForecast`, `ShiftPlan`/`PathPlan`, `WorkPool`, `WorkUnit`
 - **Read models (projections, not aggregates)**: `LaborPlanObserved`,
   `UsableInventoryObserved`, backlog telemetry, rebalance recommendation
-- **Integration**: publishes `WorkReleased`; consumes `ShiftPlanCommitted`,
-  `StockReserved`, `ReservationRevoked`, `TaskCompleted`
+- **Integration**: publishes `WorkReleased` (consumed by
+  fulfillment-execution) and `PathCapacityChanged` (consumed by
+  order-management); consumes `ShiftPlanCommitted`, `StockReserved`,
+  `ReservationRevoked`, `TaskCompleted`, `OrderAllocated`,
+  `OrderPartiallyAllocated`, and — with `PATH_CATALOGUE_SOURCE=kafka` —
+  process-path-management's catalogue events

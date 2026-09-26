@@ -8,6 +8,21 @@ description: Run the service in-memory or against Postgres, exercise the API wit
 
 # Running locally
 
+## The process-path catalogue comes first
+
+Every `pathId` is validated against the declared process-path catalogue
+([ADR-0012](../adr/0012-process-path-catalogue-validation.md)); an unknown one
+is rejected with `400 unknown-path-id`. With the default
+`PATH_CATALOGUE_SOURCE=file` the service reads the YAML at
+`PATH_CATALOGUE_FILE` (default `/etc/wes-work-planning/process-paths.yaml`) and
+**refuses to start** if that file is missing or invalid. Locally, point it at
+`warehouse-infra`'s catalogue, which declares the `pick`, `pack`, `rebin` and
+`slam` prefixes (so `pick-a` below is a known path):
+
+```sh
+export PATH_CATALOGUE_FILE=../warehouse-infra/config/process-paths/sortable-fc.yaml
+```
+
 ## Option 1 — in-memory, no infrastructure
 
 ```sh
@@ -20,14 +35,14 @@ restart; this is the fastest way to try the API.
 ## Option 2 — Postgres
 
 ```sh
-docker compose up -d
-
-# requires the golang-migrate CLI
-migrate -path migrations \
-  -database "postgres://wes:wes@localhost:5432/wes?sslmode=disable" up
+docker compose up -d   # Postgres only
 
 DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cmd/wes
 ```
+
+`cmd/wes` applies the OLTP migrations (`MIGRATIONS_PATH`, default
+`migrations`) itself before opening the pool — there is no separate
+`migrate` step.
 
 ## Configuration
 
@@ -37,6 +52,15 @@ DATABASE_URL="postgres://wes:wes@localhost:5432/wes?sslmode=disable" go run ./cm
 | `DATABASE_URL` | *(unset)* | Postgres DSN; falls back to in-memory repositories if unset |
 | `EVENT_PUBLISHER` | `log` | `log` or `kafka` — where domain events get published |
 | `KAFKA_BROKERS` | *(unset)* | Comma-separated brokers. Required for `EVENT_PUBLISHER=kafka`, and setting it also starts the inbound integration-event consumer |
+| `KAFKA_CONSUMER_GROUP` | `wes-work-planning` | Consumer group of the integration-event consumer. Set a unique value when running locally against the shared cluster broker, or the deployed pod keeps the partition and your process consumes nothing |
+| `PATH_CATALOGUE_SOURCE` | `file` | `file` reads `PATH_CATALOGUE_FILE` at boot; `kafka` replays `warehouse.process-path-management.events` (own per-process consumer group) and blocks startup until the replay completes |
+| `PATH_CATALOGUE_FILE` | `/etc/wes-work-planning/process-paths.yaml` | Catalogue YAML for `PATH_CATALOGUE_SOURCE=file` |
+| `MIGRATIONS_PATH` | `migrations` | OLTP migrations applied on start when `DATABASE_URL` is set |
+| `PRODUCT_CLASSIFICATION_MODE` / `INVENTORY_STORAGE_BASE_URL` | `permissive` / *(unset)* | `http` enables the inventory-storage classification lookup ([ADR-0009](../adr/0009-product-classification-propagation-to-work-released.md)) |
+| `TRAVEL_DISTANCE_MODE` / `FACILITY_LAYOUT_BASE_URL` | `permissive` / *(unset)* | `http` enables the facility-layout travel-distance lookup ([ADR-0017](../adr/0017-travel-distance-lookup-on-commit-shift-plan.md)) |
+
+The full list, including observability and analytics variables, is in the
+repository `README.md`.
 
 Note that `KAFKA_BROKERS` and `EVENT_PUBLISHER` are independent: setting
 `KAFKA_BROKERS` alone starts *consuming* without switching the publisher away
@@ -80,12 +104,13 @@ Every endpoint, with full schemas and status codes, is in the
 
 ## Connecting to the shared Kafka broker
 
-A single broker is shared by all five `warehouse-systems` services
-(`~/warehouse-systems/docker-compose.kafka.yml`, `localhost:9092`). This
-service does **not** run its own.
+A single broker is shared by every `warehouse-systems` service: the
+in-cluster Kafka release in the `warehouse` kind cluster, reachable from the
+host at `localhost:9092`. This repo's `docker-compose.yml` runs Postgres only.
 
 ```sh
-KAFKA_BROKERS=localhost:9092 EVENT_PUBLISHER=kafka go run ./cmd/wes
+KAFKA_BROKERS=localhost:9092 EVENT_PUBLISHER=kafka \
+  KAFKA_CONSUMER_GROUP=wes-work-planning-local-$USER go run ./cmd/wes
 ```
 
 Smoke-test the consumer by hand — publish a `ShiftPlanCommitted`-shaped
@@ -98,7 +123,8 @@ echo '{"event_id":"11111111-1111-4111-8111-111111111111",
        "source":"workforce-management",
        "data":{"building_id":"BLD1","shift_id":"S1","path_id":"pick-a",
                "planned_heads":7,"planned_rate":95.5,"planned_hours":8}}' \
-| kafka-console-producer.sh --bootstrap-server localhost:9092 \
+| kubectl --context kind-warehouse -n warehouse-systems exec -i kafka-controller-0 -c kafka -- \
+    kafka-console-producer.sh --bootstrap-server localhost:9092 \
     --topic warehouse.workforce.events
 
 curl -s localhost:8080/paths/pick-a/labor-plan-view
@@ -115,10 +141,11 @@ go build ./...
 go vet ./...
 go test ./...            # unit + httptest + godog acceptance
 go test ./... -race
-go test -tags=integration ./...   # needs DATABASE_URL and/or KAFKA_BROKERS
+go test -tags=integration ./...   # needs Docker (testcontainers); the older Postgres repo suite also needs DATABASE_URL
 ```
 
-CI (`.github/workflows/ci.yml`) runs these as separate jobs — `lint`, `test`,
-`bdd`, `integration`, `api-lint`, `arch-test`, `helm-lint`, with a
-weekly/dispatch-only `mutation` job and a `docker-publish` job gated behind
-all of them on pushes to `main`.
+CI (`.github/workflows/ci.yml`) runs these as separate jobs on every push and
+pull request — `lint`, `test`, `bdd`, `integration`, `mutation-fast`, `vuln`,
+`api-lint`, `arch-test`, `docs-api-drift` and `web`. `helm-lint` and
+`trivy-scan` run only on pull requests into `main`; `mutation` and `drift` are
+weekly/dispatch-only; `docker-publish` and `release` run on pushes to `main`.

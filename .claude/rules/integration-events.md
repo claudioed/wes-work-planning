@@ -60,10 +60,13 @@ Topic `warehouse.work-planning.events`:
   optional CPT `cutoffAt` (via `GET /paths/{pathId}/telemetry?cutoffAt=`).
   `data`: `{"path_id","cutoff_at","remaining_units","known"}`. `known` is
   `false` for a FlowFed path (no hard admission ceiling) or a ReleaseFed
-  path with no WIP limit provisioned. This is order-management's named
-  future real source for its `ports.PathCapacity` port (ADR-0018).
+  path with no WIP limit provisioned. Consumed by order-management's
+  `internal/adapters/outbound/kafkapathcapacity` adapter, which backs its
+  `ports.PathCapacity` port (own per-process consumer group; wired when
+  order-management runs with `PATH_CATALOGUE_SOURCE=kafka`) (ADR-0018).
 - All other domain events are also published to this topic for
-  observability; only `WorkReleased` has a live consumer today.
+  observability; only `WorkReleased` and `PathCapacityChanged` have live
+  consumers today.
 
 Topic `warehouse.wes.analytics` (separate, additive — see
 `.claude/rules/architecture.md`'s Analytics section): every domain event,
@@ -92,6 +95,21 @@ consumed only by `cmd/wes-projector`.
    `POST /paths/{pathId}/work-units` with event choreography — verify
    against `internal/adapters/inbound/kafka/consumer.go`'s doc comment
    before assuming scope, this list grows.
+
+All four run under one consumer group, `KAFKA_CONSUMER_GROUP` (default
+`wes-work-planning`, resolved by `consumerGroupID` in `cmd/wes/main.go`).
+Any second process on the shared broker (a local `go run`, the e2e harness)
+must set a unique value, or the rebalance gives the single partition to one
+member and the other silently consumes nothing.
+
+Separately, with `PATH_CATALOGUE_SOURCE=kafka`,
+`internal/adapters/outbound/kafkacatalog` replays
+`warehouse.process-path-management.events` (`ProcessPathCreated` /
+`ProcessPathUpdated` / `ProcessPathDeactivated`) into the in-memory
+`pathcatalog.Catalogue` (ADR-0012) under its own per-process consumer group
+(NOT `KAFKA_CONSUMER_GROUP`) — startup blocks until the replay catches up,
+then it follows live. Default `PATH_CATALOGUE_SOURCE=file` reads
+`PATH_CATALOGUE_FILE` instead.
 
 ### Idempotency
 
