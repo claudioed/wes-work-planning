@@ -3,15 +3,15 @@ id: 0020-flowfed-path-observed-throughput-signal
 slug: /adr/0020-flowfed-path-observed-throughput-signal
 title: 0020. FlowFed paths stay Known=false permanently; an observed-throughput signal is proposed alongside, not instead
 sidebar_label: 0020. FlowFed throughput signal
-description: ADR 0020 (Proposed) — answers ADR-0018's deferred "different signal for flow-fed admission" question. Concludes a hard admission ceiling is structurally impossible for FlowFed paths regardless of new data, evaluates facility-layout geometry, process-path-management's cycle-time/CPT data, and fulfillment-execution's completion history as candidate inputs, and proposes an additive, honestly-caveated observed-throughput signal built from data this repo already has.
+description: ADR 0020 (Accepted) — answers ADR-0018's deferred "different signal for flow-fed admission" question. Concludes a hard admission ceiling is structurally impossible for FlowFed paths regardless of new data, evaluates facility-layout geometry, process-path-management's cycle-time/CPT data, and fulfillment-execution's completion history as candidate inputs, and proposes an additive, honestly-caveated observed-throughput signal built from data this repo already has.
 ---
 
 # 0020. FlowFed paths stay `Known=false` permanently; an observed-throughput signal is proposed alongside, not instead
 
 ## Status
 
-**Proposed.** This is an open design proposal for review, not a
-pre-decided change. Nothing in this record is implemented.
+**Accepted** (2026-09-26). Documentation-only decision (Option B: reuse
+the existing `GET /reports/throughput` report) — no code follows.
 
 ## Context
 
