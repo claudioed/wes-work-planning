@@ -333,11 +333,15 @@ make check        # fast pre-commit loop: fmt-check, vet, build, lint, test -rac
 make check-all    # check + 90% coverage gate + arch-test + bdd (pre-push gate)
 make vuln         # govulncheck ./... — known CVEs in deps and the Go stdlib
 make mutation     # fast blocking mutation subset CI enforces (./internal/domain/release)
+make contract     # Schemathesis property-based contract tests vs apis/openapi.yaml
 ```
 
 `make integration` and `make mutation-all` are excluded from both bundles: the
 first needs a running Postgres (`DATABASE_URL`), the second is the slow,
-exhaustive mutation run that CI keeps on a weekly schedule.
+exhaustive mutation run that CI keeps on a weekly schedule. `make contract`
+boots the service with its in-memory adapters (plus a baked-in process-path
+catalogue) and needs `schemathesis==4.28.0` (`st`) installed — see
+`scripts/contract-test.sh`.
 
 Git hooks are managed with [lefthook](https://github.com/evilmartians/lefthook)
 via `lefthook.yml` — `pre-commit` runs `make fmt-check`, `make vet` and
