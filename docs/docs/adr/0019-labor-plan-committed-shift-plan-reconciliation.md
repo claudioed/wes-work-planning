@@ -3,15 +3,14 @@ id: 0019-labor-plan-committed-shift-plan-reconciliation
 slug: /adr/0019-labor-plan-committed-shift-plan-reconciliation
 title: 0019. Reconcile our committed PathPlan against Workforce's LaborPlanObserved
 sidebar_label: 0019. Labor plan reconciliation
-description: ADR 0019 (Proposed) — closes ADR-0006's explicitly deferred reconciliation gap. Proposes an event-triggered, same-process comparison of this repo's own PathPlan against the already-projected LaborPlanObserved read model, a new PathPlanDriftDetected fact surfaced additively (never enforced), and why the comparison belongs here rather than in workforce-management or a new shared service.
+description: ADR 0019 (Accepted) — closes ADR-0006's explicitly deferred reconciliation gap. Proposes an event-triggered, same-process comparison of this repo's own PathPlan against the already-projected LaborPlanObserved read model, a new PathPlanDriftDetected fact surfaced additively (never enforced), and why the comparison belongs here rather than in workforce-management or a new shared service.
 ---
 
 # 0019. Reconcile our committed `PathPlan` against Workforce's `LaborPlanObserved`
 
 ## Status
 
-**Proposed.** This is an open design proposal for review, not a pre-decided
-change. Nothing in this record is implemented.
+**Accepted** (2026-09-26). Implementation follows in a subsequent PR.
 
 ## Context
 
